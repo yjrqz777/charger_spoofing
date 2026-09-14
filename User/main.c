@@ -101,8 +101,12 @@ int main(void)
 
     while (1)
     {
+#if USER_LCD_ENABLE
         /* 显示任务：LCD 数据面板刷新 */
         PT_TASK_REG(0, UsrDisplayTask);
+#else
+        /* LCD 已关闭：显示任务不注册，SPI1/DMA 只初始化不传输 */
+#endif
 
         /* 按键任务：3 键事件扫描（单击/双击/长按） */
         PT_TASK_REG(1, UsrButtonTask);

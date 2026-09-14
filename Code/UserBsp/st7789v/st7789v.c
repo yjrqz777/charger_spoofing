@@ -8,10 +8,133 @@
 #define LCD_DMA_FONT_SIZE_Y       (24u)
 #define LCD_DMA_FONT_SIZE_X       (LCD_DMA_FONT_SIZE_Y / 2u)
 #define LCD_DMA_MAX_DIGITS        (8u)
+
+/**
+ * @brief DMA 缓冲大小。
+ * @note  保持 4608 字节（8 个 24 号数字 = 8 × 12 × 24 × 2），这是既有
+ *        LCD_ShowIntNumAsync()/LCD_ShowFloatNumAsync() 依赖的容量，不能改小。
+ *        整屏填充复用它：240x135 每个 DMA 块最多推 9 行（2160 像素），
+ *        因此一次调用耗时仍在 1ms 量级，整屏约需 15 次服务。
+ */
 #define LCD_DMA_BUFFER_BYTES      (LCD_DMA_MAX_DIGITS * LCD_DMA_FONT_SIZE_X * LCD_DMA_FONT_SIZE_Y * 2u)
 
 static uint8_t au8LcdDmaBuffer[LCD_DMA_BUFFER_BYTES];
 static volatile uint8_t u8LcdDmaBusy = 0u;
+
+/** @brief 分段填充状态：窗口、当前行、颜色与每次推送的行数。 */
+static uint8_t  s_u8FillActive = 0u;
+static uint16_t s_u16FillX0 = 0u;
+static uint16_t s_u16FillY0 = 0u;
+static uint16_t s_u16FillX1 = 0u;
+static uint16_t s_u16FillY1 = 0u;
+static uint16_t s_u16FillRow = 0u;
+static uint16_t s_u16FillColor = 0u;
+static uint8_t  s_u8FillRowsPerChunk = 1u;
+
+/**
+ * @brief 最小字号的行跨度表（font.h 的 24 号字体）。
+ * @note  这些字体是逐行组织的位掩码，每行 (sizey/2 + 7)/8 字节，
+ *        位 0 对应最左侧像素——与 LCD_ShowChar() 的取位方式一致。
+ */
+static const uint8_t *LCD_GetFontTable(uint8_t u8SizeY)
+{
+    if (u8SizeY == 12u)
+    {
+        return (const uint8_t *)ascii_1206;
+    }
+    if (u8SizeY == 16u)
+    {
+        return (const uint8_t *)ascii_1608;
+    }
+    if (u8SizeY == 24u)
+    {
+        return (const uint8_t *)ascii_2412;
+    }
+    if (u8SizeY == 32u)
+    {
+        return (const uint8_t *)ascii_3216;
+    }
+    return 0;
+}
+
+/** @brief 透明取字节接口：把二维字体表当成一维字节流读取。 */
+static uint8_t LCD_FontByte(const uint8_t *pu8FontTable, uint16_t u16Offset)
+{
+    return pu8FontTable[u16Offset];
+}
+
+/**
+ * @brief 渲染一个字符到 DMA 缓冲。
+ * @param[out] pu8Buffer 目标缓冲。
+ * @param[in]  u32Offset 起始字节偏移。
+ * @param[in]  u8Char 字符。
+ * @param[in]  u8SizeX 字符宽（sizey/2）。
+ * @param[in]  u8SizeY 字符高。
+ * @param[in]  u16Fc 前景色；u16Bc 背景色。
+ * @return 写入的字节数。
+ */
+static uint32_t LCD_RenderCharDma(uint8_t *pu8Buffer, uint32_t u32Offset,
+                                  uint32_t u32Capacity,
+                                  uint8_t u8Char, uint8_t u8SizeX, uint8_t u8SizeY,
+                                  uint16_t u16Fc, uint16_t u16Bc)
+{
+    const uint8_t *pu8FontTable;
+    uint16_t u16GlyphBytes;
+    uint16_t u16RowBytes;
+    uint8_t  u8Row;
+    uint8_t  u8Column;
+    uint8_t  u8Byte;
+    uint32_t u32Index = u32Offset;
+
+    pu8FontTable = LCD_GetFontTable(u8SizeY);
+    if (pu8FontTable == 0)
+    {
+        return u32Offset;
+    }
+
+    if ((u8Char < (uint8_t)' ') || (u8Char > (uint8_t)'~'))
+    {
+        u8Char = (uint8_t)' ';
+    }
+    u8Char = (uint8_t)(u8Char - (uint8_t)' ');
+
+    u16RowBytes = (uint16_t)((u8SizeX + 7u) / 8u);
+    u16GlyphBytes = (uint16_t)(u16RowBytes * u8SizeY);
+
+    /* 缓冲放不下整个字符就不画，避免越界写 */
+    if ((u32Index + (uint32_t)u16GlyphBytes * 8u) > u32Capacity)
+    {
+        return u32Offset;
+    }
+
+    for (u8Row = 0u; u8Row < u8SizeY; u8Row++)
+    {
+        for (u8Column = 0u; u8Column < u8SizeX; u8Column++)
+        {
+            u8Byte = LCD_FontByte(pu8FontTable,
+                                  (uint16_t)((uint16_t)u8Char * u16GlyphBytes +
+                                             (uint16_t)u8Row * u16RowBytes +
+                                             (uint16_t)(u8Column >> 3)));
+
+            if ((u8Byte & (uint8_t)(1u << (u8Column & 0x07u))) != 0u)
+            {
+                pu8Buffer[u32Index] = (uint8_t)(u16Fc >> 8u);
+                u32Index++;
+                pu8Buffer[u32Index] = (uint8_t)u16Fc;
+                u32Index++;
+            }
+            else
+            {
+                pu8Buffer[u32Index] = (uint8_t)(u16Bc >> 8u);
+                u32Index++;
+                pu8Buffer[u32Index] = (uint8_t)u16Bc;
+                u32Index++;
+            }
+        }
+    }
+
+    return u32Index;
+}
 
 static void LCD_DmaWritePixel(uint16_t u16Color, uint32_t *pu32Index)
 {
@@ -195,18 +318,209 @@ void LCD_color_point(uint16_t x1, uint16_t y1, uint16_t color)
  * @param[in] xend  结束 x 坐标（不含）
  * @param[in] yend  结束 y 坐标（不含）
  * @param[in] color 填充颜色（RGB565）
+ * @note   大区域走 DMA 分段输出：每行一次 DMA，由 BspLcdService() 逐行推进，
+ *         单次只占用 CPU 约 1ms；小区域仍走原来的轮询路径以避免碎片化。
  */
 void LCD_Fill(uint16_t xsta,uint16_t ysta,uint16_t xend,uint16_t yend,uint16_t color)
 {
-	uint16_t i,j;
-	LCD_Address_Set(xsta,ysta,xend-1,yend-1);// 设置显示范围
-	for(i=ysta;i<yend;i++)
+	uint16_t u16Width;
+	uint16_t u16RowsByCount;
+
+	if (xend <= xsta || yend <= ysta)
 	{
-		for(j=xsta;j<xend;j++)
-		{
-			LCD_Write_Data2Bytes(color);
-		}
+		return;
 	}
+
+	u16Width = (uint16_t)(xend - xsta);
+
+	/* 只有"整屏宽"的填充才能一次设置窗口后连续灌多行：因为窗口内的像素是
+	 * 按行连续推进的，行宽不等于屏宽时中间会跳掉未填充的部分。 */
+	if (u16Width == LCD_W)
+	{
+		u16RowsByCount = (uint16_t)(LCD_DMA_BUFFER_BYTES / (uint16_t)(u16Width * 2u));
+		if (u16RowsByCount == 0u)
+		{
+			u16RowsByCount = 1u;
+		}
+
+		s_u16FillX0 = xsta;
+		s_u16FillY0 = ysta;
+		s_u16FillX1 = xend;
+		s_u16FillY1 = yend;
+		s_u16FillColor = color;
+		s_u16FillRow = ysta;
+		s_u8FillRowsPerChunk = (uint8_t)u16RowsByCount;
+		s_u8FillActive = 1u;
+
+		LCD_Address_Set(xsta, ysta, (uint16_t)(xend - 1u), (uint16_t)(yend - 1u));
+		return;
+	}
+
+	/* 非整屏宽：窗口每次都要重设，因此按"每次一块"处理，块内行数仍受缓冲限制 */
+	{
+		uint16_t u16PixelsPerChunk = (uint16_t)(LCD_DMA_BUFFER_BYTES / 2u);
+		uint16_t u16Rows = (uint16_t)(u16PixelsPerChunk / u16Width);
+
+		if (u16Rows == 0u)
+		{
+			u16Rows = 1u;
+		}
+
+		s_u16FillX0 = xsta;
+		s_u16FillY0 = ysta;
+		s_u16FillX1 = xend;
+		s_u16FillY1 = yend;
+		s_u16FillColor = color;
+		s_u16FillRow = ysta;
+		s_u8FillRowsPerChunk = (uint8_t)u16Rows;
+		s_u8FillActive = 1u;
+	}
+}
+
+/**
+ * @brief 推进一块填充的 DMA 输出（块内包含 s_u8FillRowsPerChunk 行）。
+ * @retval E_OK   已启动一次 DMA。
+ * @retval E_BUSY 上一次 DMA 未完成（下次服务再试）。
+ * @retval E_ERROR 当前没有待完成的填充。
+ */
+eStatusDef LCD_FillRowDma(uint16_t y, uint16_t u16Color)
+{
+	uint16_t u16Width;
+	uint16_t u16Rows;
+	uint16_t u16Index;
+	uint32_t u32Offset = 0u;
+	eStatusDef eStatus;
+
+	(void)y;
+	(void)u16Color;
+
+	if (s_u8FillActive == 0u)
+	{
+		return E_ERROR;
+	}
+
+	if (u8LcdDmaBusy != 0u)
+	{
+		return E_BUSY;
+	}
+
+	if (s_u16FillRow >= s_u16FillY1)
+	{
+		s_u8FillActive = 0u;
+		return E_ERROR;
+	}
+
+	u16Width = (uint16_t)(s_u16FillX1 - s_u16FillX0);
+	u16Rows = s_u8FillRowsPerChunk;
+	if ((uint16_t)(s_u16FillRow + u16Rows) > s_u16FillY1)
+	{
+		u16Rows = (uint16_t)(s_u16FillY1 - s_u16FillRow);
+	}
+
+	/* 非整屏宽时每次都要重新定位窗口（连续多行会串到未填充区域） */
+	if (u16Width != LCD_W)
+	{
+		LCD_Address_Set(s_u16FillX0, s_u16FillRow,
+		                (uint16_t)(s_u16FillX1 - 1u),
+		                (uint16_t)(s_u16FillRow + u16Rows - 1u));
+	}
+
+	for (u16Index = 0u; u16Index < (uint16_t)(u16Width * u16Rows); u16Index++)
+	{
+		au8LcdDmaBuffer[u32Offset] = (uint8_t)(s_u16FillColor >> 8u);
+		u32Offset++;
+		au8LcdDmaBuffer[u32Offset] = (uint8_t)s_u16FillColor;
+		u32Offset++;
+	}
+
+	LCD_DC(DATA);
+	u8LcdDmaBusy = 1u;
+	eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32Offset);
+	if (eStatus != E_OK)
+	{
+		u8LcdDmaBusy = 0u;
+		return eStatus;
+	}
+
+	s_u16FillRow = (uint16_t)(s_u16FillRow + u16Rows);
+	if (s_u16FillRow >= s_u16FillY1)
+	{
+		s_u8FillActive = 0u;
+	}
+
+	return E_OK;
+}
+
+/**
+ * @brief 判断是否仍有待推进的整屏填充。
+ * @retval 1 有待完成的行。
+ * @retval 0 填充已结束。
+ */
+uint8_t LCD_FillActive(void)
+{
+	return s_u8FillActive;
+}
+
+/**
+ * @brief 渲染一段字符串（最多 LCD_DMA_TEXT_CHUNK_CHARS 字符）并 DMA 送出。
+ * @note  地址窗口按整块字符区域设置，像素按行连续输出，与 LCD_ShowString()
+ *        的视觉效果一致（非叠加模式、带背景色）。
+ */
+eStatusDef LCD_ShowStringChunkDma(uint16_t x, uint16_t y, const char *p,
+                                  uint16_t fc, uint16_t bc, uint8_t sizey)
+{
+	uint8_t  u8SizeX;
+	uint8_t  u8Count = 0u;
+	uint32_t u32Offset = 0u;
+	eStatusDef eStatus;
+
+	if ((p == 0) || (sizey == 0u) || ((sizey & 0x01u) != 0u))
+	{
+		return E_ERROR;
+	}
+	if (LCD_GetFontTable(sizey) == 0)
+	{
+		return E_ERROR;
+	}
+	if (u8LcdDmaBusy != 0u)
+	{
+		return E_BUSY;
+	}
+
+	u8SizeX = (uint8_t)(sizey / 2u);
+
+	while ((p[u8Count] != '\0') && (u8Count < LCD_DMA_TEXT_CHUNK_CHARS))
+	{
+		uint32_t u32Next;
+
+		u32Next = LCD_RenderCharDma(au8LcdDmaBuffer, u32Offset,
+		                            (uint32_t)LCD_DMA_BUFFER_BYTES,
+		                            (uint8_t)p[u8Count], u8SizeX, sizey, fc, bc);
+		if (u32Next == u32Offset)
+		{
+			break;   /* 缓冲放不下下一个字符 */
+		}
+		u32Offset = u32Next;
+		u8Count++;
+	}
+
+	if (u8Count == 0u)
+	{
+		return E_ERROR;
+	}
+
+	LCD_Address_Set(x, y, (uint16_t)(x + (uint16_t)u8Count * u8SizeX - 1u),
+	                (uint16_t)(y + sizey - 1u));
+
+	LCD_DC(DATA);
+	u8LcdDmaBusy = 1u;
+	eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32Offset);
+	if (eStatus != E_OK)
+	{
+		u8LcdDmaBusy = 0u;
+	}
+
+	return eStatus;
 }
 
 /**
@@ -313,6 +627,25 @@ void st7789v_init(void)
     printf("[LCD] display-on sent, filling red test background\r\n");
 
     LCD_Fill(0, 0, 240, 135, RED);
+    /* LCD_Fill() 现在只登记填充请求、由 BspLcdService() 分批 DMA 输出；
+     * 初始化阶段调度器还没起来，这里自己把它推完。 */
+    while (LCD_FillActive() != 0u)
+    {
+        uint32_t u32Guard = 40000000u;
+
+        if (LCD_FillRowDma(0u, RED) == E_BUSY)
+        {
+            /* 等当前这块 DMA 传完再推下一块 */
+            while ((LCD_IsTransferBusy() != 0u) && (u32Guard != 0u))
+            {
+                u32Guard--;
+            }
+            if (u32Guard == 0u)
+            {
+                break;   /* 异常保护：不允许在初始化里死等 */
+            }
+        }
+    }
     printf("[LCD] init complete, spi_error=%u\r\n", (unsigned int)BspSpiHasError());
 }
 

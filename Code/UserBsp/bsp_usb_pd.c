@@ -1,9 +1,33 @@
 /**
  * @file bsp_usb_pd.c
- * @brief Implements a USB Power Delivery sink using the CH32X035 USBPD PHY.
- * @details The protocol flow is adapted from the WCH USBPD_SNK example. The
- *          existing TIM3 scheduler supplies time instead of the example's
- *          dedicated TIM1 millisecond interrupt.
+ * @brief USB Power Delivery sink driver for the CH32X035 USBPD PHY.
+ * @details 本文件是 tools/EVT/EXAM/USBPD/USBPD_SNK/User/PD_Process.c 的直接移植。
+ *          与原例程的对应关系：
+ *
+ *            例程 PD_Rx_Mode()             <-> BspUsbPdRxMode()
+ *            例程 PD_SINK_Init()           <-> BspUsbPdSinkInit()
+ *            例程 PD_PHY_Reset()           <-> BspUsbPdPhyReset()
+ *            例程 PD_Init()                <-> BspUsbPdInit()
+ *            例程 PD_Detect()              <-> BspUsbPdDetectCc()
+ *            例程 PD_Det_Proc()            <-> BspUsbPdDetectProc()
+ *            例程 PD_Phy_SendPack()        <-> BspUsbPdSendPhy()
+ *            例程 PD_Load_Header()         <-> BspUsbPdLoadHeader()
+ *            例程 PD_Send_Handle()         <-> BspUsbPdSendMessage()
+ *            例程 PDO_Request()            <-> BspUsbPdStartPdoRequest()
+ *            例程 PD_Save_Adapter_SrcCap() <-> BspUsbPdSaveSourceCapabilities()
+ *            例程 PD_PDO_Analyse()         <-> BspUsbPdDecodeFixedPdo()
+ *            例程 PD_Main_Proc()           <-> BspUsbPdProcess()
+ *
+ *          与原例程仅有的结构性差别（协议行为保持一致）：
+ *            1) 时基来自本工程 TIM3 的 1ms 节拍，而不是例程的 TIM1 中断；
+ *            2) 例程在 main() 的 while(1) 里连续调用 PD_Main_Proc()，
+ *               本工程由 Protothread 任务每 1ms 调用一次；
+ *            3) 例程收到 PS_RDY 后不再做任何事，本工程额外置位契约状态，
+ *               供按键切换档位与显示使用。
+ *
+ * @warning 版本标识见 BSP_USB_PD_VERSION_STR。串口日志里若没有
+ *          "[PD] driver v2-example-port" 这一行，说明烧的不是本文件
+ *          （IDE 覆盖了改动，或者根本没有重新编译）。
  */
 
 #include "bsp_usb_pd.h"
@@ -12,41 +36,79 @@
 #include "ch32x035_rcc.h"
 #include "ch32x035_usbpd.h"
 
-static uint8_t au8PdRxBuffer[BSP_USB_PD_BUFFER_SIZE] __attribute__((aligned(4)));
-static uint8_t au8PdTxBuffer[BSP_USB_PD_BUFFER_SIZE] __attribute__((aligned(4)));
+/** @brief 构建标识：用来确认烧录的固件确实是本文件编译出来的。 */
+#define BSP_USB_PD_VERSION_STR "v2-example-port"
+
+/* ========================================================================== *
+ *  与例程一致的状态数据
+ * ========================================================================== */
+
+/** @brief 例程 PD_Rx_Buf[34] —— PD 接收缓冲 */
+static uint8_t au8PdRxBuffer[34] __attribute__((aligned(4)));
+
+/** @brief 例程 PD_Tx_Buf[34] —— PD 发送缓冲 */
+static uint8_t au8PdTxBuffer[34] __attribute__((aligned(4)));
+
+/** @brief 例程 PD_Ack_Buf[2] —— GoodCRC 应答缓冲 */
 static uint8_t au8PdAckBuffer[2];
-static uint8_t au8PdSourceCapabilities[BSP_USB_PD_SOURCE_CAP_SIZE];
+
+/** @brief 例程 Adapter_SrcCap[30] —— 电源送来的 SrcCap（首字节为固定档位数） */
+static uint8_t au8PdSourceCapabilities[30];
+
+/** @brief 例程 SinkCap_5V1A_Tab[4] —— 本受电端对外声明的能力 */
 static const uint8_t au8PdSinkCapability[4] = {0x64u, 0x90u, 0x01u, 0x36u};
 
-static volatile uint8_t u8PdMessageReceived = 0u;
-static volatile uint8_t u8PdHardResetReceived = 0u;
-static volatile uint32_t u32PdRxInterruptCount = 0u;
-static CC_STATUS ePdState = STA_IDLE;
+/** @brief 例程 PD_Ctl.Msg_ID —— 消息 ID，左对齐存放（bit[3:1]），故按 +2 递增 */
 static uint8_t u8PdMessageId = 0u;
-static uint8_t u8PdDetectCount = 0u;
-static uint16_t u16PdDetectTimerMs = 0u;
+
+/** @brief 例程 PD_Ctl.PD_State */
+static CC_STATUS ePdState = STA_IDLE;
+
+/** @brief 例程 PD_Ctl.Flag.Bit.Msg_Recvd —— 已收报文待主循环处理 */
+static volatile uint8_t u8PdMessageReceived = 0u;
+
+/** @brief 例程 PD_Ctl.PD_Comm_Timer —— 当前状态的通信超时计数（ms） */
 static uint16_t u16PdCommunicationTimerMs = 0u;
+
+/** @brief 例程 PD_Ctl.Det_Timer / Det_Cnt —— 4ms 检测节拍与连续命中计数 */
+static uint8_t u8PdDetectTimerMs = 0u;
+static uint8_t u8PdDetectCount = 0u;
+
+/** @brief 例程 PD_Ctl.Err_Op_Cnt —— SrcCap 等待重试次数 */
+static uint8_t u8PdErrOpCount = 0u;
+
+/** @brief 例程 Tmr_Ms_Dlt —— 两次 PD_Main_Proc 之间的毫秒增量 */
+static volatile uint8_t u8PdMsDelta = 0u;
+
+/** @brief 对外暴露的连接/契约状态（供显示与按键使用，例程中无此结构） */
 static tBspUsbPdStatusDef tBspUsbPdStatus;
 
-static void BspUsbPdEnterReceiveMode(void);
+/** @brief 诊断计数：已成功发出的报文数 / 已接收处理完的报文数 */
+static uint16_t u16PdTxCount = 0u;
+static uint16_t u16PdRxCount = 0u;
+
+/* ========================================================================== *
+ *  内部函数声明（顺序与例程一致）
+ * ========================================================================== */
+
+static void BspUsbPdRxMode(void);
 static void BspUsbPdSinkInit(void);
 static void BspUsbPdPhyReset(void);
-static void BspUsbPdSendPhy(uint8_t u8Wait, uint8_t *pu8Buffer,
+static void BspUsbPdDetectProc(void);
+static uint8_t BspUsbPdDetectCc(void);
+static void BspUsbPdSendPhy(uint8_t u8Mode, uint8_t *pu8Buffer,
                             uint8_t u8Length, uint8_t u8Sop);
+static void BspUsbPdLoadHeader(uint8_t u8Extended, uint8_t u8MessageType);
+static eStatusDef BspUsbPdSendMessage(uint8_t *pu8Payload, uint8_t u8Length);
+static void BspUsbPdStartPdoRequest(uint8_t u8PdoIndex);
+static void BspUsbPdSaveSourceCapabilities(void);
+static void BspUsbPdDecodeFixedPdo(uint8_t u8PdoIndex, const uint8_t *pu8SourceCap,
+                                   uint16_t *pu16CurrentMa, uint16_t *pu16VoltageMv);
 
 /**
- * @brief Selects sink mode and enables the external CC pull-down state.
+ * @brief 对应例程 PD_Rx_Mode()：进入 BMC 接收模式。
  */
-static void BspUsbPdSinkInit(void)
-{
-    USBPD->PORT_CC1 = CC_CMP_66 | CC_PD;
-    USBPD->PORT_CC2 = CC_CMP_66 | CC_PD;
-}
-
-/**
- * @brief Places the USBPD peripheral in BMC receive mode.
- */
-static void BspUsbPdEnterReceiveMode(void)
+static void BspUsbPdRxMode(void)
 {
     USBPD->CONFIG |= PD_ALL_CLR;
     USBPD->CONFIG &= ~PD_ALL_CLR;
@@ -59,29 +121,135 @@ static void BspUsbPdEnterReceiveMode(void)
 }
 
 /**
- * @brief Resets protocol state while retaining physical sink configuration.
+ * @brief 对应例程 PD_SINK_Init()：受电模式 + CC 上 5.1k 下拉状态标记。
+ */
+static void BspUsbPdSinkInit(void)
+{
+    USBPD->PORT_CC1 = CC_CMP_66 | CC_PD;
+    USBPD->PORT_CC2 = CC_CMP_66 | CC_PD;
+}
+
+/**
+ * @brief 对应例程 PD_PHY_Reset()：回到 IDLE，并清掉通信成功标志。
  */
 static void BspUsbPdPhyReset(void)
 {
     BspUsbPdSinkInit();
     ePdState = STA_IDLE;
-    u8PdMessageId = 0u;
     u16PdCommunicationTimerMs = 0u;
-    u8PdMessageReceived = 0u;
     tBspUsbPdStatus.u8ContractValid = 0u;
 }
 
 /**
- * @brief Starts one raw BMC packet transmission.
- * @param[in] u8Wait Nonzero waits until the PHY finishes transmitting.
- * @param[in] pu8Buffer Pointer to the packet bytes, or null for reset symbols.
- * @param[in] u8Length Number of packet bytes.
- * @param[in] u8Sop SOP selector supported by the CH32X035 peripheral.
+ * @brief 对应例程 PD_Detect()：检测 CC 上是否有 SRC 的 Rp 上拉。
+ * @retval 0 无连接；1 = CC1 连接；2 = CC2 连接。
+ * @note  例程用 PORT_CC1 & CC_PD 判断当前是否处于 SNK 模式，只有 SNK 才做插入
+ *        检测；这里保留该判断。CC 上本板已有 5.1k 外部下拉，故无源时 CC 电平
+ *        为低，比较器门限 0.22V 不会误触发。
  */
-static void BspUsbPdSendPhy(uint8_t u8Wait, uint8_t *pu8Buffer,
+static uint8_t BspUsbPdDetectCc(void)
+{
+    uint8_t u8Result = 0u;
+    uint8_t u8CmpCc1 = 0u;
+    uint8_t u8CmpCc2 = 0u;
+
+    USBPD->PORT_CC1 &= ~(CC_CMP_Mask | PA_CC_AI);
+    USBPD->PORT_CC1 |= CC_CMP_22;
+    Delay_Us(2u);
+    if ((USBPD->PORT_CC1 & PA_CC_AI) != 0u)
+    {
+        u8CmpCc1 |= bCC_CMP_22;
+    }
+
+    USBPD->PORT_CC2 &= ~(CC_CMP_Mask | PA_CC_AI);
+    USBPD->PORT_CC2 |= CC_CMP_22;
+    Delay_Us(2u);
+    if ((USBPD->PORT_CC2 & PA_CC_AI) != 0u)
+    {
+        u8CmpCc2 |= bCC_CMP_22;
+    }
+
+    if ((USBPD->PORT_CC1 & CC_PD) != 0u)
+    {
+        if ((u8CmpCc1 & bCC_CMP_22) == bCC_CMP_22)
+        {
+            u8Result = 1u;
+        }
+        if ((u8CmpCc2 & bCC_CMP_22) == bCC_CMP_22)
+        {
+            if (u8Result != 0u)
+            {
+                u8Result = 1u;   /* 华为 A-to-C 线在两条 CC 上都有上拉 */
+            }
+            else
+            {
+                u8Result = 2u;
+            }
+        }
+    }
+
+    return u8Result;
+}
+
+/**
+ * @brief 对应例程 PD_Det_Proc()：检测到稳定连接后锁定 CC 通道并进入 SRC_CONNECT。
+ * @note  例程要求连续 5 次命中（每 4ms 一次）才认为插好。
+ */
+static void BspUsbPdDetectProc(void)
+{
+    uint8_t u8Status;
+
+    if (tBspUsbPdStatus.u8Connected != 0u)
+    {
+        /* 已连接：例程此处靠 VBUS 电压判断拔出，本工程暂不处理拔出。 */
+        return;
+    }
+
+    u8Status = BspUsbPdDetectCc();
+    if (u8Status == 0u)
+    {
+        u8PdDetectCount = 0u;
+        return;
+    }
+
+    u8PdDetectCount++;
+    if (u8PdDetectCount < 5u)
+    {
+        return;
+    }
+
+    u8PdDetectCount = 0u;
+    tBspUsbPdStatus.u8Connected = 1u;
+    tBspUsbPdStatus.u8CcLine = u8Status;
+
+    if (((USBPD->PORT_CC1 & CC_PD) != 0u) || ((USBPD->PORT_CC2 & CC_PD) != 0u))
+    {
+        if (u8Status == 1u)
+        {
+            USBPD->CONFIG &= ~CC_SEL;
+        }
+        else
+        {
+            USBPD->CONFIG |= CC_SEL;
+        }
+        ePdState = STA_SRC_CONNECT;
+        printf("[PD] CC%u SRC Connect\r\n", (unsigned int)u8Status);
+    }
+
+    u16PdCommunicationTimerMs = 0u;
+}
+
+/**
+ * @brief 对应例程 PD_Phy_SendPack()：发一个 BMC 包。
+ * @param[in] u8Mode 非 0 时发完等待 IF_TX_END，并立刻切回接收模式等 GoodCRC。
+ * @param[in] pu8Buffer 报文缓冲；发 Hard Reset 时为 0。
+ * @param[in] u8Length 报文长度。
+ * @param[in] u8Sop SOP 选择。
+ */
+static void BspUsbPdSendPhy(uint8_t u8Mode, uint8_t *pu8Buffer,
                             uint8_t u8Length, uint8_t u8Sop)
 {
-    if ((USBPD->CONFIG & CC_SEL) != 0u)
+    if ((USBPD->CONFIG & CC_SEL) == CC_SEL)
     {
         USBPD->PORT_CC2 |= CC_LVE;
     }
@@ -98,17 +266,24 @@ static void BspUsbPdSendPhy(uint8_t u8Wait, uint8_t *pu8Buffer,
     USBPD->STATUS &= BMC_AUX_INVALID;
     USBPD->CONTROL |= BMC_START;
 
-    if (u8Wait != 0u)
+    if (u8Mode != 0u)
     {
+        /* 例程注释：发送一定会完成，因此不做超时。 */
         while ((USBPD->STATUS & IF_TX_END) == 0u)
         {
         }
         USBPD->STATUS |= IF_TX_END;
-        USBPD->PORT_CC1 &= ~CC_LVE;
-        USBPD->PORT_CC2 &= ~CC_LVE;
 
-        /* Match the WCH USBPD_SNK flow: switch to RX immediately so the
-         * caller can poll the GoodCRC response for the packet just sent. */
+        if ((USBPD->CONFIG & CC_SEL) == CC_SEL)
+        {
+            USBPD->PORT_CC2 &= ~CC_LVE;
+        }
+        else
+        {
+            USBPD->PORT_CC1 &= ~CC_LVE;
+        }
+
+        /* 切到接收，准备收 GoodCRC */
         USBPD->CONFIG |= PD_ALL_CLR;
         USBPD->CONFIG &= ~PD_ALL_CLR;
         USBPD->CONTROL &= ~PD_TX_EN;
@@ -119,14 +294,26 @@ static void BspUsbPdSendPhy(uint8_t u8Wait, uint8_t *pu8Buffer,
 }
 
 /**
- * @brief Loads a sink/UFP PD message header into the transmit buffer.
- * @param[in] u8Extended Nonzero sets the extended-message flag.
- * @param[in] u8MessageType USB-PD message type.
+ * @brief 对应例程 PD_Load_Header()：组装报文头。
+ * @note  Header 布局：
+ *          bit15        扩展报文
+ *          bit[14:12]   数据对象个数（发送时由 BspUsbPdSendMessage 填）
+ *          bit[11:9]    消息 ID
+ *          bit8         电源角色：0 = SINK
+ *          bit[7:6]      协议版本：01 = PD2.0
+ *          bit5         数据角色：0 = UFP
+ *          bit[4:0]     消息类型
+ *        Msg_ID 左对齐存放，因此 & 0x0E 等价于 <<1，保持与例程逐字一致。
  */
 static void BspUsbPdLoadHeader(uint8_t u8Extended, uint8_t u8MessageType)
 {
-    au8PdTxBuffer[0] = (uint8_t)(u8MessageType | 0x40u); /* PD 2.0, UFP. */
-    au8PdTxBuffer[1] = (uint8_t)(u8PdMessageId & 0x0Eu); /* Sink power role. */
+    au8PdTxBuffer[0] = u8MessageType;
+    /* PD_Ctl.Flag.Bit.PD_Role == 0（受电端），不加 0x20 */
+    /* PD_Ctl.Flag.Bit.PD_Version == 0（PD2.0），按例程加 0x40 */
+    au8PdTxBuffer[0] |= 0x40u;
+
+    au8PdTxBuffer[1] = (uint8_t)(u8PdMessageId & 0x0Eu);
+    /* PD_Ctl.Flag.Bit.PR_Role == 0（SINK），不加 0x01 */
     if (u8Extended != 0u)
     {
         au8PdTxBuffer[1] |= 0x80u;
@@ -134,311 +321,176 @@ static void BspUsbPdLoadHeader(uint8_t u8Extended, uint8_t u8MessageType)
 }
 
 /**
- * @brief Sends one PD message and waits for its GoodCRC response.
- * @param[in] pu8Payload Pointer to the data objects, or null for a control message.
- * @param[in] u8Length Payload length; it must be a multiple of four up to 28 bytes.
- * @retval E_OK The source acknowledged the message.
- * @retval E_ERROR The payload was invalid or all retries timed out.
+ * @brief 对应例程 PD_Send_Handle()：发送并等待 GoodCRC，最多尝试 3 次。
+ * @param[in] pu8Payload 数据对象；控制报文传 0。
+ * @param[in] u8Length 负载长度，必须是 4 的倍数且不超过 28。
+ * @retval E_OK 收到 GoodCRC。
+ * @retval E_ERROR 全部尝试超时。
+ * @note  等待窗口 = 250 次 × (3us + 循环开销) ≈ 750us，和例程一致。
  */
-static eStatusDef BspUsbPdSendMessage(const uint8_t *pu8Payload, uint8_t u8Length)
+static eStatusDef BspUsbPdSendMessage(uint8_t *pu8Payload, uint8_t u8Length)
 {
-    uint8_t Attempt;
-    uint8_t ByteIndex;
-    uint16_t Timeout;
+    uint8_t    u8TryCount;
+    uint8_t    u8Count;
+    uint16_t   u16Timeout;
+    eStatusDef eResult = E_ERROR;
 
-    if (((u8Length & 0x03u) != 0u) || (u8Length > 28u))
+    if ((u8Length % 4u) != 0u)
+    {
+        return E_ERROR;
+    }
+    if (u8Length > 28u)
     {
         return E_ERROR;
     }
 
-    au8PdTxBuffer[1] |= (uint8_t)((u8Length >> 2u) << 4u);
-    for (ByteIndex = 0u; ByteIndex < u8Length; ByteIndex++)
+    u8Count = (uint8_t)(u8Length >> 2u);
+    au8PdTxBuffer[1] |= (uint8_t)(u8Count << 4u);
+    for (u8Count = 0u; u8Count != u8Length; u8Count++)
     {
-        au8PdTxBuffer[2u + ByteIndex] = pu8Payload[ByteIndex];
+        au8PdTxBuffer[2u + u8Count] = pu8Payload[u8Count];
     }
 
-    for (Attempt = 0u; Attempt < BSP_USB_PD_TX_RETRY_COUNT; Attempt++)
+    u8TryCount = 4u;
+    while (--u8TryCount != 0u)              /* 最多执行 3 次 */
     {
         NVIC_DisableIRQ(USBPD_IRQn);
         BspUsbPdSendPhy(1u, au8PdTxBuffer, (uint8_t)(u8Length + 2u), UPD_SOP0);
 
-        for (Timeout = 0u; Timeout < 250u; Timeout++)
+        /* 收 GoodCRC 超时 750us */
+        u16Timeout = 250u;
+        while (--u16Timeout != 0u)
         {
-            if ((USBPD->STATUS & IF_RX_ACT) != 0u)
+            if ((USBPD->STATUS & IF_RX_ACT) == IF_RX_ACT)
             {
                 USBPD->STATUS |= IF_RX_ACT;
                 if ((USBPD->BMC_BYTE_CNT == 6u) &&
                     ((au8PdRxBuffer[0] & 0x1Fu) == DEF_TYPE_GOODCRC))
                 {
                     u8PdMessageId = (uint8_t)(u8PdMessageId + 2u);
-                    BspUsbPdEnterReceiveMode();
-                    return E_OK;
+                    u16PdTxCount++;
+                    eResult = E_OK;
+                    break;
                 }
             }
             Delay_Us(3u);
         }
-    }
 
-    BspUsbPdEnterReceiveMode();
-    return E_ERROR;
-}
-
-/**
- * @brief Decodes a fixed supply PDO.
- * @param[in] pu8Pdo Pointer to four little-endian PDO bytes.
- * @param[out] pu16CurrentMa Pointer receiving maximum current in milliamperes.
- * @param[out] pu16VoltageMv Pointer receiving voltage in millivolts.
- */
-static void BspUsbPdDecodeFixedPdo(const uint8_t *pu8Pdo,
-                                   uint16_t *pu16CurrentMa,
-                                   uint16_t *pu16VoltageMv)
-{
-    uint32_t Pdo;
-
-    Pdo = (uint32_t)pu8Pdo[0] |
-          ((uint32_t)pu8Pdo[1] << 8u) |
-          ((uint32_t)pu8Pdo[2] << 16u) |
-          ((uint32_t)pu8Pdo[3] << 24u);
-    *pu16CurrentMa = (uint16_t)((Pdo & 0x03FFu) * 10u);
-    *pu16VoltageMv = (uint16_t)(((Pdo >> 10u) & 0x03FFu) * 50u);
-}
-
-/**
- * @brief Saves fixed PDOs from the most recent Source_Capabilities message.
- */
-static void BspUsbPdSaveSourceCapabilities(void)
-{
-    uint8_t AdvertisedCount;
-    uint8_t FixedCount;
-    uint8_t Index;
-
-    AdvertisedCount = (uint8_t)((au8PdRxBuffer[1] >> 4u) & 0x07u);
-    FixedCount = 0u;
-    for (Index = 0u; Index < AdvertisedCount; Index++)
-    {
-        if ((au8PdRxBuffer[2u + (Index * 4u) + 3u] & 0xC0u) != 0u)
+        if (eResult == E_OK)
         {
             break;
         }
-        FixedCount++;
     }
 
-    tBspUsbPdStatus.u8PdoCount = FixedCount;
-    au8PdSourceCapabilities[0] = FixedCount;
-    memcpy(&au8PdSourceCapabilities[1], &au8PdRxBuffer[2],
-           (size_t)FixedCount * 4u);
+    BspUsbPdRxMode();
+
+    return eResult;
 }
 
 /**
- * @brief Requests the configured fixed PDO from the attached source.
+ * @brief 对应例程 PDO_Request()：按固定档位号发出 Request。
+ * @param[in] u8PdoIndex 档位号，从 1 开始。
+ * @note  Request Data Object 直接复用接收缓冲的前 4 字节（与例程一致）。
  */
-static void BspUsbPdStartPdoRequest(uint8_t u8RequestedIndex)
+static void BspUsbPdStartPdoRequest(uint8_t u8PdoIndex)
 {
-    const uint8_t *pu8Pdo;
-    uint16_t CurrentMa;
-    uint16_t VoltageMv;
-    uint16_t CurrentUnits;
-    uint32_t RequestDataObject;
-    uint8_t au8Request[4];
+    uint16_t   CurrentMa;
+    uint16_t   VoltageMv;
+    eStatusDef eStatus;
 
-    pu8Pdo = &au8PdSourceCapabilities[1u + ((u8RequestedIndex - 1u) * 4u)];
-    BspUsbPdDecodeFixedPdo(pu8Pdo, &CurrentMa, &VoltageMv);
-    CurrentUnits = (uint16_t)(CurrentMa / 10u);
-    RequestDataObject = ((uint32_t)u8RequestedIndex << 28u) |
-                        0x03000000u |
-                        ((uint32_t)CurrentUnits << 10u) |
-                        CurrentUnits;
-    au8Request[0] = (uint8_t)RequestDataObject;
-    au8Request[1] = (uint8_t)(RequestDataObject >> 8u);
-    au8Request[2] = (uint8_t)(RequestDataObject >> 16u);
-    au8Request[3] = (uint8_t)(RequestDataObject >> 24u);
+    if ((u8PdoIndex > tBspUsbPdStatus.u8PdoCount) || (u8PdoIndex == 0u))
+    {
+        printf("[PD] pdo_index error!\r\n");
+        return;
+    }
 
-    tBspUsbPdStatus.u8RequestedPdo = u8RequestedIndex;
+    memcpy(&au8PdRxBuffer[2], &au8PdSourceCapabilities[4u * (u8PdoIndex - 1u) + 1u], 4u);
+    BspUsbPdDecodeFixedPdo(1u, &au8PdRxBuffer[2], &CurrentMa, &VoltageMv);
+
+    tBspUsbPdStatus.u8RequestedPdo = u8PdoIndex;
     tBspUsbPdStatus.u16CurrentMa = CurrentMa;
     tBspUsbPdStatus.u16VoltageMv = VoltageMv;
     printf("[PD] request PDO%u: %u mV %u mA\r\n",
-           (unsigned int)u8RequestedIndex,
+           (unsigned int)u8PdoIndex,
            (unsigned int)VoltageMv,
            (unsigned int)CurrentMa);
 
-    BspUsbPdLoadHeader(0u, DEF_TYPE_REQUEST);
-    if (BspUsbPdSendMessage(au8Request, sizeof(au8Request)) == E_OK)
+    BspUsbPdLoadHeader(0x00u, DEF_TYPE_REQUEST);
+    au8PdRxBuffer[5] = 0x03u;
+    au8PdRxBuffer[5] |= (uint8_t)(u8PdoIndex << 4);
+    au8PdRxBuffer[3] = au8PdRxBuffer[3] & 0x03u;
+    au8PdRxBuffer[3] |= (uint8_t)(au8PdRxBuffer[2] << 2);
+    au8PdRxBuffer[4] = au8PdRxBuffer[3];
+    au8PdRxBuffer[4] <<= 2;
+    au8PdRxBuffer[4] = au8PdRxBuffer[4] & 0x0Cu;
+    au8PdRxBuffer[4] |= (uint8_t)(au8PdRxBuffer[2] >> 6);
+
+    eStatus = BspUsbPdSendMessage(&au8PdRxBuffer[2], 4u);
+
+    if (eStatus == E_OK)
     {
         ePdState = STA_RX_ACCEPT_WAIT;
     }
     else
     {
         ePdState = STA_TX_SOFTRST;
-        printf("[PD] request GoodCRC timeout\r\n");
     }
     u16PdCommunicationTimerMs = 0u;
 }
 
 /**
- * @brief Detects which CC input contains a source pull-up.
- * @retval 0 No source was detected.
- * @retval 1 A source was detected on CC1.
- * @retval 2 A source was detected on CC2.
+ * @brief 对应例程 PD_Save_Adapter_SrcCap()：保存电源能力表（去掉 PPS 段）。
  */
-static uint8_t BspUsbPdDetectCc(void)
+static void BspUsbPdSaveSourceCapabilities(void)
 {
-    uint8_t Cc1Detected;
-    uint8_t Cc2Detected;
+    uint8_t u8Index;
+    uint8_t u8Length;
 
-    USBPD->PORT_CC1 &= ~(CC_CMP_Mask | PA_CC_AI);
-    USBPD->PORT_CC1 |= CC_CMP_22;
-    Delay_Us(2u);
-    Cc1Detected = ((USBPD->PORT_CC1 & PA_CC_AI) != 0u) ? 1u : 0u;
+    u8Length = (uint8_t)((au8PdRxBuffer[1] >> 4u) & 0x07u);
 
-    USBPD->PORT_CC2 &= ~(CC_CMP_Mask | PA_CC_AI);
-    USBPD->PORT_CC2 |= CC_CMP_22;
-    Delay_Us(2u);
-    Cc2Detected = ((USBPD->PORT_CC2 & PA_CC_AI) != 0u) ? 1u : 0u;
-
-    if (Cc1Detected != 0u)
+    for (u8Index = 0u; u8Index < u8Length; u8Index++)
     {
-        return 1u;
-    }
-    if (Cc2Detected != 0u)
-    {
-        return 2u;
-    }
-    return 0u;
-}
-
-/**
- * @brief Processes stable CC source attachment.
- */
-static void BspUsbPdProcessDetection(void)
-{
-    uint8_t CcLine;
-
-    if (tBspUsbPdStatus.u8Connected != 0u)
-    {
-        return;
-    }
-
-    CcLine = BspUsbPdDetectCc();
-    if (CcLine == 0u)
-    {
-        u8PdDetectCount = 0u;
-        return;
-    }
-
-    u8PdDetectCount++;
-    if (u8PdDetectCount < BSP_USB_PD_DETECT_STABLE_COUNT)
-    {
-        return;
-    }
-
-    u8PdDetectCount = 0u;
-    tBspUsbPdStatus.u8Connected = 1u;
-    tBspUsbPdStatus.u8CcLine = CcLine;
-    if (CcLine == 1u)
-    {
-        USBPD->CONFIG &= ~CC_SEL;
-    }
-    else
-    {
-        USBPD->CONFIG |= CC_SEL;
-    }
-
-    /* CC detection changes comparator and channel-selection state. Restart the
-     * BMC receiver so it listens on the selected wire from a clean state. */
-    BspUsbPdEnterReceiveMode();
-    ePdState = STA_SRC_CONNECT;
-    u16PdCommunicationTimerMs = 0u;
-    printf("[PD] source connected on CC%u\r\n", (unsigned int)CcLine);
-}
-
-/**
- * @brief Processes a received source message after its GoodCRC was transmitted.
- */
-static void BspUsbPdProcessReceivedMessage(void)
-{
-    uint8_t MessageType;
-    uint8_t Index;
-    uint16_t CurrentMa;
-    uint16_t VoltageMv;
-
-    u8PdMessageReceived = 0u;
-    MessageType = (uint8_t)(au8PdRxBuffer[0] & 0x1Fu);
-    switch (MessageType)
-    {
-    case DEF_TYPE_SRC_CAP:
-        Delay_Ms(5u);
-        BspUsbPdSaveSourceCapabilities();
-        printf("[PD] source capabilities: %u fixed PDO(s)\r\n",
-               (unsigned int)tBspUsbPdStatus.u8PdoCount);
-        for (Index = 0u; Index < tBspUsbPdStatus.u8PdoCount; Index++)
+        if ((au8PdRxBuffer[2u + (u8Index << 2) + 3u] & 0xC0u) == 0xC0u)
         {
-            BspUsbPdDecodeFixedPdo(&au8PdSourceCapabilities[1u + (Index * 4u)],
-                                   &CurrentMa, &VoltageMv);
-            printf("[PD] PDO%u: %u mV %u mA\r\n",
-                   (unsigned int)(Index + 1u),
-                   (unsigned int)VoltageMv,
-                   (unsigned int)CurrentMa);
+            break;
         }
-        if (tBspUsbPdStatus.u8PdoCount != 0u)
-        {
-            Index = USER_PD_REQUEST_PDO_INDEX;
-            if ((Index == 0u) || (Index > tBspUsbPdStatus.u8PdoCount))
-            {
-                Index = 1u;
-            }
-            BspUsbPdStartPdoRequest(Index);
-        }
-        break;
-
-    case DEF_TYPE_ACCEPT:
-        ePdState = STA_RX_PS_RDY_WAIT;
-        u16PdCommunicationTimerMs = 0u;
-        printf("[PD] request accepted\r\n");
-        break;
-
-    case DEF_TYPE_PS_RDY:
-        ePdState = STA_IDLE;
-        tBspUsbPdStatus.u8ContractValid = 1u;
-        printf("[PD] contract ready: %u mV %u mA\r\n",
-               (unsigned int)tBspUsbPdStatus.u16VoltageMv,
-               (unsigned int)tBspUsbPdStatus.u16CurrentMa);
-        break;
-
-    case DEF_TYPE_GET_SNK_CAP:
-        Delay_Ms(1u);
-        BspUsbPdLoadHeader(0u, DEF_TYPE_SNK_CAP);
-        (void)BspUsbPdSendMessage(au8PdSinkCapability,
-                                  sizeof(au8PdSinkCapability));
-        break;
-
-    case DEF_TYPE_SOFT_RESET:
-        Delay_Ms(1u);
-        BspUsbPdLoadHeader(0u, DEF_TYPE_ACCEPT);
-        (void)BspUsbPdSendMessage(NULL, 0u);
-        break;
-
-    case DEF_TYPE_VCONN_SWAP:
-    case DEF_TYPE_PR_SWAP:
-    case DEF_TYPE_DR_SWAP:
-        Delay_Ms(1u);
-        BspUsbPdLoadHeader(0u, DEF_TYPE_REJECT);
-        (void)BspUsbPdSendMessage(NULL, 0u);
-        break;
-
-    case DEF_TYPE_WAIT:
-        break;
-
-    default:
-        printf("[PD] unsupported message type 0x%02x\r\n",
-               (unsigned int)MessageType);
-        break;
     }
 
-    BspUsbPdEnterReceiveMode();
+    tBspUsbPdStatus.u8PdoCount = u8Index;
+
+    au8PdRxBuffer[5] = 0x3Eu;
+    au8PdRxBuffer[1] &= 0x8Fu;
+    au8PdRxBuffer[1] |= (uint8_t)(u8Index << 4);
+    au8PdSourceCapabilities[0] = u8Index;
+    memcpy(&au8PdSourceCapabilities[1], &au8PdRxBuffer[2], (size_t)(u8Index << 2));
 }
 
 /**
- * @brief Initializes PC14/PC15 and the CH32X035 USBPD sink peripheral.
+ * @brief 对应例程 PD_PDO_Analyse()：解析固定档位的电压/电流。
+ */
+static void BspUsbPdDecodeFixedPdo(uint8_t u8PdoIndex, const uint8_t *pu8SourceCap,
+                                   uint16_t *pu16CurrentMa, uint16_t *pu16VoltageMv)
+{
+    uint32_t u32Temp;
+
+    u32Temp = pu8SourceCap[((u8PdoIndex - 1u) << 2) + 0u] +
+              ((uint32_t)pu8SourceCap[((u8PdoIndex - 1u) << 2) + 1u] << 8) +
+              ((uint32_t)pu8SourceCap[((u8PdoIndex - 1u) << 2) + 2u] << 16);
+
+    if (pu16CurrentMa != 0)
+    {
+        *pu16CurrentMa = (uint16_t)((u32Temp & 0x000003FFu) * 10u);
+    }
+
+    if (pu16VoltageMv != 0)
+    {
+        u32Temp = u32Temp >> 10;
+        *pu16VoltageMv = (uint16_t)((u32Temp & 0x000003FFu) * 50u);
+    }
+}
+
+/**
+ * @brief 对应例程 PD_Init()：PD 外设与状态初始化。
  */
 void BspUsbPdInit(void)
 {
@@ -452,13 +504,14 @@ void BspUsbPdInit(void)
     memset(au8PdSourceCapabilities, 0, sizeof(au8PdSourceCapabilities));
     memset(&tBspUsbPdStatus, 0, sizeof(tBspUsbPdStatus));
 
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC | RCC_APB2Periph_AFIO, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_USBPD, ENABLE);
 
-    GPIO_InitStructure.GPIO_Pin = USB_PD_CC1_PIN | USB_PD_CC2_PIN;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_14 | GPIO_Pin_15;
     GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IN_FLOATING;
-    GPIO_Init(USB_PD_CC_PORT, &GPIO_InitStructure);
+    GPIO_Init(GPIOC, &GPIO_InitStructure);
 
     AFIO->CTLR |= USBPD_IN_HVT | USBPD_PHY_V33;
     USBPD->CONFIG = PD_DMA_EN;
@@ -471,77 +524,102 @@ void BspUsbPdInit(void)
     NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
     NVIC_Init(&NVIC_InitStructure);
 
+    u8PdMessageId = 0u;
+    u8PdDetectTimerMs = 0u;
     u8PdDetectCount = 0u;
-    u16PdDetectTimerMs = 0u;
-    u8PdHardResetReceived = 0u;
-    u32PdRxInterruptCount = 0u;
+    u8PdErrOpCount = 0u;
+    u8PdMessageReceived = 0u;
+    u16PdCommunicationTimerMs = 0u;
+    u8PdMsDelta = 0u;
+    u16PdTxCount = 0u;
+    u16PdRxCount = 0u;
+
+    au8PdSourceCapabilities[0] = 1u;
+
     BspUsbPdPhyReset();
-    BspUsbPdEnterReceiveMode();
+    BspUsbPdRxMode();
+
+    printf("[PD] driver %s\r\n", BSP_USB_PD_VERSION_STR);
     printf("[PD] sink initialized: CC1=PC14 CC2=PC15 request=PDO%u\r\n",
            (unsigned int)USER_PD_REQUEST_PDO_INDEX);
 }
 
 /**
- * @brief Advances CC detection and the USB-PD protocol state machine.
- * @param[in] u16ElapsedMs Milliseconds since the previous call.
+ * @brief 对应例程 main() 循环体 + PD_Main_Proc()。
+ * @param[in] u16ElapsedMs 距上次调用的毫秒数（由用户任务传入）。
  */
 void BspUsbPdProcess(uint16_t u16ElapsedMs)
 {
-    if (u8PdHardResetReceived != 0u)
+    uint8_t    u8PdHeader;
+    uint8_t    u8Index;
+    uint16_t   CurrentMa;
+    uint16_t   VoltageMv;
+    eStatusDef eStatus;
+
+    u8PdMsDelta = (uint8_t)((u16ElapsedMs > 255u) ? 255u : u16ElapsedMs);
+
+    /* ---- 例程 main()：Det_Timer > 4 才做一次连接检测 ---- */
+    u8PdDetectTimerMs = (uint8_t)(u8PdDetectTimerMs + u8PdMsDelta);
+    if (u8PdDetectTimerMs > 4u)
     {
-        u8PdHardResetReceived = 0u;
-        BspUsbPdPhyReset();
-        tBspUsbPdStatus.u8Connected = 0u;
-        tBspUsbPdStatus.u8CcLine = 0u;
-        BspUsbPdEnterReceiveMode();
-        printf("[PD] hard reset received\r\n");
+        u8PdDetectTimerMs = 0u;
+        BspUsbPdDetectProc();
     }
 
-    u16PdDetectTimerMs = (uint16_t)(u16PdDetectTimerMs + u16ElapsedMs);
-    if (u16PdDetectTimerMs >= BSP_USB_PD_DETECT_INTERVAL_MS)
-    {
-        u16PdDetectTimerMs = 0u;
-        BspUsbPdProcessDetection();
-    }
-
+    /* ---- 例程 PD_Main_Proc()：状态处理 ---- */
     switch (ePdState)
     {
+    case STA_DISCONNECT:
+        printf("[PD] Disconnect\r\n");
+        BspUsbPdPhyReset();
+        break;
+
     case STA_SRC_CONNECT:
-        u16PdCommunicationTimerMs =
-            (uint16_t)(u16PdCommunicationTimerMs + u16ElapsedMs);
-        if (u16PdCommunicationTimerMs >= BSP_USB_PD_SOURCE_CAP_TIMEOUT_MS)
+        /* 1s 内没收到 SrcCap 就重试，超过 5 次放弃 */
+        u16PdCommunicationTimerMs = (uint16_t)(u16PdCommunicationTimerMs + u8PdMsDelta);
+        if (u16PdCommunicationTimerMs > 999u)
         {
-            printf("[PD] source capabilities timeout: cc=%u rx=%lu cfg=%08lx ctl=%08lx stat=%08lx cnt=%lu\r\n",
-                   (unsigned int)tBspUsbPdStatus.u8CcLine,
-                   (unsigned long)u32PdRxInterruptCount,
+            u8PdErrOpCount++;
+            printf("[PD] SrcCap timeout #%u: cfg=%08lx stat=%08lx cnt=%lu\r\n",
+                   (unsigned int)u8PdErrOpCount,
                    (unsigned long)USBPD->CONFIG,
-                   (unsigned long)USBPD->CONTROL,
                    (unsigned long)USBPD->STATUS,
                    (unsigned long)USBPD->BMC_BYTE_CNT);
+            if (u8PdErrOpCount > 5u)
+            {
+                u8PdErrOpCount = 0u;
+                ePdState = STA_IDLE;
+            }
+            else
+            {
+                BspUsbPdPhyReset();
+                ePdState = STA_SRC_CONNECT;
+                BspUsbPdRxMode();
+            }
             u16PdCommunicationTimerMs = 0u;
-            BspUsbPdPhyReset();
-            ePdState = STA_SRC_CONNECT;
-            BspUsbPdEnterReceiveMode();
-            printf("[PD] source capabilities timeout, retry\r\n");
         }
         break;
 
     case STA_RX_ACCEPT_WAIT:
     case STA_RX_PS_RDY_WAIT:
-        u16PdCommunicationTimerMs =
-            (uint16_t)(u16PdCommunicationTimerMs + u16ElapsedMs);
-        if (u16PdCommunicationTimerMs >= BSP_USB_PD_RESPONSE_TIMEOUT_MS)
+        u16PdCommunicationTimerMs = (uint16_t)(u16PdCommunicationTimerMs + u8PdMsDelta);
+        if (u16PdCommunicationTimerMs > 499u)
         {
             ePdState = STA_TX_SOFTRST;
             u16PdCommunicationTimerMs = 0u;
         }
         break;
 
+    case STA_RX_PS_RDY:
+        ePdState = STA_IDLE;
+        break;
+
     case STA_TX_SOFTRST:
-        BspUsbPdLoadHeader(0u, DEF_TYPE_SOFT_RESET);
-        if (BspUsbPdSendMessage(NULL, 0u) == E_OK)
+        BspUsbPdLoadHeader(0x00u, DEF_TYPE_SOFT_RESET);
+        eStatus = BspUsbPdSendMessage(0, 0u);
+        if (eStatus == E_OK)
         {
-            ePdState = STA_SRC_CONNECT;
+            ePdState = STA_IDLE;
         }
         else
         {
@@ -551,20 +629,105 @@ void BspUsbPdProcess(uint16_t u16ElapsedMs)
         break;
 
     case STA_TX_HRST:
-        NVIC_DisableIRQ(USBPD_IRQn);
-        BspUsbPdSendPhy(1u, NULL, 0u, UPD_HARD_RESET);
-        BspUsbPdPhyReset();
-        ePdState = STA_SRC_CONNECT;
-        BspUsbPdEnterReceiveMode();
+        BspUsbPdSendPhy(0x01u, 0, 0u, UPD_HARD_RESET);
+        BspUsbPdRxMode();
+        ePdState = STA_IDLE;
+        u16PdCommunicationTimerMs = 0u;
         break;
 
     default:
         break;
     }
 
+    /* ---- 例程 PD_Main_Proc()：收到报文后的处理 ---- */
     if (u8PdMessageReceived != 0u)
     {
-        BspUsbPdProcessReceivedMessage();
+        u8PdHeader = (uint8_t)(au8PdRxBuffer[0] & 0x1Fu);
+        u16PdRxCount++;
+        switch (u8PdHeader)
+        {
+        case DEF_TYPE_SRC_CAP:
+            Delay_Ms(5u);
+            BspUsbPdSaveSourceCapabilities();
+
+            printf("[PD] SrcCap: %u fixed PDO(s) (tx=%u rx=%u)\r\n",
+                   (unsigned int)tBspUsbPdStatus.u8PdoCount,
+                   (unsigned int)u16PdTxCount, (unsigned int)u16PdRxCount);
+            for (u8Index = 1u; u8Index <= tBspUsbPdStatus.u8PdoCount; ++u8Index)
+            {
+                BspUsbPdDecodeFixedPdo(u8Index, &au8PdSourceCapabilities[1],
+                                       &CurrentMa, &VoltageMv);
+                printf("[PD] PDO%u: %u mV %u mA\r\n",
+                       (unsigned int)u8Index,
+                       (unsigned int)VoltageMv,
+                       (unsigned int)CurrentMa);
+            }
+            /* 例程默认申请第 5 组 PDO（20V）；本工程按配置项申请。 */
+            u8Index = USER_PD_REQUEST_PDO_INDEX;
+            if ((u8Index == 0u) || (u8Index > tBspUsbPdStatus.u8PdoCount))
+            {
+                u8Index = 1u;
+            }
+            BspUsbPdStartPdoRequest(u8Index);
+            break;
+
+        case DEF_TYPE_ACCEPT:
+            ePdState = STA_RX_PS_RDY_WAIT;
+            u16PdCommunicationTimerMs = 0u;
+            printf("[PD] ACCEPT (tx=%u rx=%u)\r\n",
+                   (unsigned int)u16PdTxCount, (unsigned int)u16PdRxCount);
+            break;
+
+        case DEF_TYPE_PS_RDY:
+            printf("[PD] PS_RDY: contract %u mV %u mA\r\n",
+                   (unsigned int)tBspUsbPdStatus.u16VoltageMv,
+                   (unsigned int)tBspUsbPdStatus.u16CurrentMa);
+            ePdState = STA_IDLE;
+            tBspUsbPdStatus.u8ContractValid = 1u;
+            break;
+
+        case DEF_TYPE_WAIT:
+            break;
+
+        case DEF_TYPE_GET_SNK_CAP:
+            Delay_Ms(1u);
+            BspUsbPdLoadHeader(0x00u, DEF_TYPE_SNK_CAP);
+            (void)BspUsbPdSendMessage((uint8_t *)au8PdSinkCapability,
+                                      sizeof(au8PdSinkCapability));
+            break;
+
+        case DEF_TYPE_SOFT_RESET:
+            Delay_Ms(1u);
+            BspUsbPdLoadHeader(0x00u, DEF_TYPE_ACCEPT);
+            (void)BspUsbPdSendMessage(0, 0u);
+            break;
+
+        case DEF_TYPE_GET_SRC_CAP_EX:
+            Delay_Ms(1u);
+            /* 本工程不声明扩展能力，用 REJECT 明确回绝 */
+            BspUsbPdLoadHeader(0x00u, DEF_TYPE_REJECT);
+            (void)BspUsbPdSendMessage(0, 0u);
+            break;
+
+        case DEF_TYPE_VCONN_SWAP:
+        case DEF_TYPE_PR_SWAP:
+        case DEF_TYPE_DR_SWAP:
+            Delay_Ms(1u);
+            BspUsbPdLoadHeader(0x00u, DEF_TYPE_REJECT);
+            (void)BspUsbPdSendMessage(0, 0u);
+            break;
+
+        default:
+            printf("[PD] msg 0x%02x ignored (hdr=%02x %02x)\r\n",
+                   (unsigned int)u8PdHeader,
+                   (unsigned int)au8PdRxBuffer[0],
+                   (unsigned int)au8PdRxBuffer[1]);
+            break;
+        }
+
+        /* 报文处理完，重新开收 */
+        BspUsbPdRxMode();
+        u8PdMessageReceived = 0u;
     }
 }
 
@@ -593,43 +756,52 @@ eStatusDef BspUsbPdRequestPdo(uint8_t u8PdoIndex)
         return E_ERROR;
     }
 
-    if (ePdState != STA_IDLE)
+    if ((ePdState != STA_IDLE) || (u8PdMessageReceived != 0u))
     {
         return E_BUSY;
     }
 
     tBspUsbPdStatus.u8ContractValid = 0u;
     BspUsbPdStartPdoRequest(u8PdoIndex);
+
     return E_OK;
 }
 
 /**
- * @brief Handles received USB-PD messages and PHY reset events.
+ * @brief 对应例程 USBPD_IRQHandler()。
  */
 void USBPD_IRQHandler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
 void USBPD_IRQHandler(void)
 {
     if ((USBPD->STATUS & IF_RX_ACT) != 0u)
     {
-        u32PdRxInterruptCount++;
         USBPD->STATUS |= IF_RX_ACT;
-        if (((USBPD->STATUS & MASK_PD_STAT) == PD_RX_SOP0) &&
-            (USBPD->BMC_BYTE_CNT >= 6u) &&
-            ((USBPD->BMC_BYTE_CNT != 6u) ||
-             ((au8PdRxBuffer[0] & 0x1Fu) != DEF_TYPE_GOODCRC)))
+        if ((USBPD->STATUS & MASK_PD_STAT) == PD_RX_SOP0)
         {
-            Delay_Us(30u);
-            au8PdAckBuffer[0] = 0x41u;
-            au8PdAckBuffer[1] = (uint8_t)(au8PdRxBuffer[1] & 0x0Eu);
-            USBPD->CONFIG |= IE_TX_END;
-            BspUsbPdSendPhy(0u, au8PdAckBuffer, 2u, UPD_SOP0);
+            if (USBPD->BMC_BYTE_CNT >= 6u)
+            {
+                /* 是 GoodCRC 就不应答、直接忽略 */
+                if ((USBPD->BMC_BYTE_CNT != 6u) ||
+                    ((au8PdRxBuffer[0] & 0x1Fu) != DEF_TYPE_GOODCRC))
+                {
+                    Delay_Us(30u);                 /* 延时 30us 后回 GoodCRC */
+                    au8PdAckBuffer[0] = 0x41u;
+                    /* 例程此处 |= PD_Ctl.Flag.Bit.Auto_Ack_PRRole，SNK 下该位为 0 */
+                    au8PdAckBuffer[1] = (uint8_t)(au8PdRxBuffer[1] & 0x0Eu);
+                    USBPD->CONFIG |= IE_TX_END;
+                    BspUsbPdSendPhy(0u, au8PdAckBuffer, 2u, UPD_SOP0);
+                }
+            }
         }
     }
 
     if ((USBPD->STATUS & IF_TX_END) != 0u)
     {
+        /* 包发送完成（只会是 GoodCRC 发完） */
         USBPD->PORT_CC1 &= ~CC_LVE;
         USBPD->PORT_CC2 &= ~CC_LVE;
+
+        /* 关中断，等主循环处理完再打开 */
         NVIC_DisableIRQ(USBPD_IRQn);
         u8PdMessageReceived = 1u;
         USBPD->STATUS |= IF_TX_END;
@@ -638,7 +810,7 @@ void USBPD_IRQHandler(void)
     if ((USBPD->STATUS & IF_RX_RESET) != 0u)
     {
         USBPD->STATUS |= IF_RX_RESET;
-        NVIC_DisableIRQ(USBPD_IRQn);
-        u8PdHardResetReceived = 1u;
+        BspUsbPdSinkInit();
+        printf("[PD] IF_RX_RESET\r\n");
     }
 }

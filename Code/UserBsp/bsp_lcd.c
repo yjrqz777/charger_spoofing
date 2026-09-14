@@ -1,12 +1,18 @@
 /**
  * @file    bsp_lcd.c
- * @brief   LCD 显示底层驱动实现
+ * @brief   LCD 显示底层驱动实现（字段缓冲 + DMA 分段异步输出）
  *******************************************************************************
- * @note    字段缓冲式刷新的实现思路：
+ * @note   字段缓冲式刷新的实现思路：
  *          1) 应用层调用 BspLcdBeginRefresh() 开启一帧，随后用 BspLcdAddXxx()
  *             追加待显示内容，追加只写内存，不碰 SPI；
  *          2) 每个时间片调用 BspLcdService()，仅在当前字段完成后推进；
- *          3) 整数和浮点字段通过 SPI1 TX DMA 异步输出。
+ *          3) 所有字段（数字、字符串、区域填充）都走 SPI1 TX DMA 异步输出，
+ *             单次调用最多占用 CPU 约 1ms。
+ *
+ * @warning 这里是本项目"LCD 抢时序"问题的修复点。整屏填充过去是逐像素轮询
+ *          输出（240x135 = 32400 次写，独占 CPU 约 80ms），会把主循环里的
+ *          周期任务一起拖慢，USB-PD 的 500ms 应答窗口因此被错过。现在填充按
+ *          "每行一次 DMA" 推进，字符串按"每块若干字符一次 DMA"推进。
  *******************************************************************************
  */
 
@@ -41,10 +47,15 @@ typedef struct tBspLcdOpDef
     uint8_t         u8Decimals;  /**< 小数位数 */
     uint8_t         u8SizeY;     /**< 字号 */
     uint8_t         u8TextLen;   /**< 字符串有效长度（不含结尾 0） */
+    uint8_t         u8Cursor;    /**< 字符串已送出的字符数 */
+    uint8_t         u8CursorRow; /**< 填充已送出的行数 */
     uint32_t        u32Value;    /**< 无符号整数值 */
     float           f32Value;    /**< 浮点数值 */
     char            acText[18];  /**< 字符串缓冲 */
 } tBspLcdOpDef;
+
+/** @brief 一份操作副本的字节数（供 memcpy 使用） */
+#define BSP_LCD_OP_BYTES  (sizeof(tBspLcdOpDef))
 
 /* ---- 请求帧与正在输出的活动帧 ---- */
 static tBspLcdOpDef s_atRequestedOp[BSP_LCD_FIELD_MAX];
@@ -86,58 +97,118 @@ static uint8_t BspLcdWaitDmaIdle(uint32_t u32TimeoutMs)
 }
 
 /**
- * @brief  输出一条操作到 LCD
- * @param[in] ptOp  操作描述
- * @retval 0  输出已启动
- * @retval 1  失败
+ * @brief 启动一条操作的第一块输出（全部走 DMA，不阻塞）。
+ * @param[in,out] ptOp 操作描述，会更新其推进游标。
+ * @retval E_OK    已启动。
+ * @retval E_BUSY  DMA 仍占用，下次服务再试。
+ * @retval E_ERROR 该操作无法启动。
  */
-static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
+static eStatusDef BspLcdStartOp(tBspLcdOpDef *ptOp)
 {
     switch (ptOp->u8Type)
     {
         case E_BSP_LCD_OP_FILL:
-            LCD_Fill(0u, 0u, LCD_W, LCD_H, ptOp->u16Fc);
-            return 0u;
+            /* 窗口已在 LCD_Fill() 里设置好，这里逐行 DMA。 */
+            ptOp->u8CursorRow = 0u;
+            return LCD_FillRowDma(0u, ptOp->u16Fc);
 
         case E_BSP_LCD_OP_STRING:
-            LCD_ShowString(ptOp->u16X, ptOp->u16Y, (const uint8_t *)ptOp->acText,
-                           ptOp->u16Fc, ptOp->u16Bc, ptOp->u8SizeY, 0u);
-            return 0u;
+            ptOp->u8Cursor = 0u;
+            return LCD_ShowStringChunkDma(ptOp->u16X, ptOp->u16Y,
+                                          &ptOp->acText[ptOp->u8Cursor],
+                                          ptOp->u16Fc, ptOp->u16Bc, ptOp->u8SizeY);
 
         case E_BSP_LCD_OP_UINT:
-            if (LCD_ShowIntNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
-                                    ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
-                                    ptOp->u8SizeY) != E_OK)
-            {
-                return 1u;
-            }
-            return 0u;
+            return LCD_ShowIntNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
+                                       ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
+                                       ptOp->u8SizeY);
 
         case E_BSP_LCD_OP_FLOAT:
-            if (LCD_ShowFloatNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
-                                      ptOp->u8Length, ptOp->u8Decimals,
-                                      ptOp->u16Fc, ptOp->u16Bc,
-                                      ptOp->u8SizeY) != E_OK)
-            {
-                return 1u;
-            }
-            return 0u;
+            return LCD_ShowFloatNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
+                                         ptOp->u8Length, ptOp->u8Decimals,
+                                         ptOp->u16Fc, ptOp->u16Bc,
+                                         ptOp->u8SizeY);
 
         default:
-            return 0u;
+            return E_ERROR;
     }
 }
 
 /**
- * @brief Reports whether the current LCD operation is complete.
- * @param[in] ptOp Pointer to the active operation.
- * @retval 1 The operation is complete.
- * @retval 0 Its DMA transfer is still active.
+ * @brief 推进一条正在进行中的操作。
+ * @param[in,out] ptOp 操作描述。
+ * @retval E_OK   已送出下一块。
+ * @retval E_BUSY DMA 仍占用，本次不再推进。
+ * @retval E_ERROR 本操作已无可推进内容（调用方应先查 BspLcdOpComplete()）。
  */
-static uint8_t BspLcdOpFinished(const tBspLcdOpDef *ptOp)
+static eStatusDef BspLcdAdvanceOp(tBspLcdOpDef *ptOp)
 {
-    (void)ptOp;
-    return (LCD_IsTransferBusy() == 0u) ? 1u : 0u;
+    eStatusDef eStatus;
+
+    switch (ptOp->u8Type)
+    {
+        case E_BSP_LCD_OP_FILL:
+            /* LCD_FillRowDma() 内部推进行号并维护活动标志。 */
+            return LCD_FillRowDma(0u, ptOp->u16Fc);
+
+        case E_BSP_LCD_OP_STRING:
+        {
+            uint8_t u8Chunk;
+
+            if (ptOp->u8Cursor >= ptOp->u8TextLen)
+            {
+                return E_ERROR;   /* 已画完 */
+            }
+
+            u8Chunk = (uint8_t)(ptOp->u8TextLen - ptOp->u8Cursor);
+            if (u8Chunk > LCD_DMA_TEXT_CHUNK_CHARS)
+            {
+                u8Chunk = LCD_DMA_TEXT_CHUNK_CHARS;
+            }
+
+            eStatus = LCD_ShowStringChunkDma(
+                (uint16_t)(ptOp->u16X + (uint16_t)ptOp->u8Cursor * (ptOp->u8SizeY / 2u)),
+                ptOp->u16Y,
+                &ptOp->acText[ptOp->u8Cursor],
+                ptOp->u16Fc, ptOp->u16Bc, ptOp->u8SizeY);
+            if (eStatus == E_OK)
+            {
+                ptOp->u8Cursor = (uint8_t)(ptOp->u8Cursor + u8Chunk);
+            }
+            return eStatus;
+        }
+
+        default:
+            return E_ERROR;
+    }
+}
+
+/**
+ * @brief 查询一条操作本身是否还有未送出的内容（与 DMA 忙闲无关）。
+ * @param[in] ptOp 操作描述。
+ * @retval 1 已经全部送出。
+ * @retval 0 还有内容待送。
+ * @note  帧推进必须用这个判断，不能拿 BspLcdAdvanceOp() 的返回值当"完成"，
+ *        因为"已无内容"和"DMA 忙"是两种不同的 E_ERROR/E_BUSY。
+ */
+static uint8_t BspLcdOpComplete(const tBspLcdOpDef *ptOp)
+{
+    switch (ptOp->u8Type)
+    {
+        case E_BSP_LCD_OP_FILL:
+            return (LCD_FillActive() == 0u) ? 1u : 0u;
+
+        case E_BSP_LCD_OP_STRING:
+            return (ptOp->u8Cursor >= ptOp->u8TextLen) ? 1u : 0u;
+
+        case E_BSP_LCD_OP_UINT:
+        case E_BSP_LCD_OP_FLOAT:
+            /* 数字块是一次性 DMA，传输结束即完成 */
+            return (LCD_IsTransferBusy() == 0u) ? 1u : 0u;
+
+        default:
+            return 1u;
+    }
 }
 
 /**
@@ -189,7 +260,16 @@ void BspLcdInit(void)
 
 void BspLcdClearScreen(uint16_t u16Color)
 {
-    LCD_Fill(0u, 0u, LCD_W, LCD_H, u16Color);
+    /* 不做同步整屏填充：先丢弃尚未接管的请求帧，再登记一条填充操作，
+     * 由 BspLcdService() 分批 DMA 输出（整屏约 15 次服务，每次 ~1ms）。 */
+    BspLcdCancelRefresh();
+    BspLcdAddFill(u16Color);
+}
+
+void BspLcdCancelRefresh(void)
+{
+    s_u8RefreshRequested = 0u;
+    s_u8RequestedCount   = 0u;
 }
 
 void BspLcdShowString(uint16_t u16X, uint16_t u16Y, const char *pcText,
@@ -200,30 +280,30 @@ void BspLcdShowString(uint16_t u16X, uint16_t u16Y, const char *pcText,
         return;
     }
 
+    if (u8Mode == 0u)
+    {
+        /* 非叠加模式可以整块搬进 DMA 缓冲，登记成异步字段 */
+        BspLcdAddString(u16X, u16Y, pcText, u16Fc, u16Bc, u8SizeY);
+        return;
+    }
+
+    /* 叠加模式需要逐像素判断背景，保留阻塞路径（当前界面未使用）。 */
+    BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS);
     LCD_ShowString(u16X, u16Y, (const uint8_t *)pcText, u16Fc, u16Bc, u8SizeY, u8Mode);
 }
 
 void BspLcdShowUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
                     uint8_t u8Length, uint16_t u16Fc, uint16_t u16Bc)
 {
-    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
-    {
-        return;
-    }
-
-    (void)LCD_ShowIntNumAsync(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
+    BspLcdAddUInt(u16X, u16Y, u32Value, u8Length, u16Fc);
+    (void)u16Bc;
 }
 
 void BspLcdShowFloat(uint16_t u16X, uint16_t u16Y, float f32Value, uint8_t u8Length,
                      uint8_t u8Decimals, uint16_t u16Fc, uint16_t u16Bc)
 {
-    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
-    {
-        return;
-    }
-
-    (void)LCD_ShowFloatNumAsync(u16X, u16Y, f32Value, u8Length, u8Decimals,
-                                u16Fc, u16Bc, 24u);
+    BspLcdAddFloat(u16X, u16Y, f32Value, u8Length, u8Decimals, u16Fc);
+    (void)u16Bc;
 }
 
 void BspLcdBeginRefresh(uint8_t u8StateId)
@@ -244,6 +324,9 @@ void BspLcdAddFill(uint16_t u16Color)
 
     ptOp->u8Type = (uint8_t)E_BSP_LCD_OP_FILL;
     ptOp->u16Fc  = u16Color;
+
+    /* 用 1 字节的状态标记本操作是否已经设置过窗口：这里直接借用 u8Length。 */
+    ptOp->u8Length = 1u;
 }
 
 void BspLcdAddString(uint16_t u16X, uint16_t u16Y, const char *pcText,
@@ -357,10 +440,14 @@ void BspLcdService(uint8_t u8StateId)
         /* 接管新帧时立即启动第 0 条操作。 */
         if (s_u8RefreshInFlight != 0u)
         {
-            if (BspLcdOutputOp(&s_atActiveOp[0]) != 0u)
+            if (BspLcdStartOp(&s_atActiveOp[0]) != E_OK)
             {
-                s_u8RefreshInFlight = 0u;
-                s_u8ActiveCount = 0u;
+                /* E_BUSY 时留着下一次重试；E_ERROR 说明该操作无法启动 */
+                if (LCD_IsTransferBusy() == 0u)
+                {
+                    s_u8RefreshInFlight = 0u;
+                    s_u8ActiveCount = 0u;
+                }
             }
             return;
         }
@@ -369,8 +456,12 @@ void BspLcdService(uint8_t u8StateId)
     /* 3) 推进当前活动帧 */
     if (s_u8RefreshInFlight != 0u)
     {
-        if (BspLcdOpFinished(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
+        tBspLcdOpDef *ptOp = &s_atActiveOp[s_u8ActiveIndex];
+
+        if (BspLcdOpComplete(ptOp) != 0u)
         {
+            /* 本条已全部送出（DMA 可能还在跑），切到下一条。
+             * 下一条的启动会自己检查 DMA 忙闲，不忙就直接开，忙则下次再试。 */
             s_u8ActiveIndex++;
             s_u32OpStartMs = BspTickGetMs();
 
@@ -382,11 +473,14 @@ void BspLcdService(uint8_t u8StateId)
                 return;
             }
 
-            if (BspLcdOutputOp(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
-            {
-                s_u8ActiveIndex--;
-            }
+            (void)BspLcdStartOp(&s_atActiveOp[s_u8ActiveIndex]);
             return;
+        }
+
+        /* 本条未送完：只在 DMA 空闲时补送下一块 */
+        if (LCD_IsTransferBusy() == 0u)
+        {
+            (void)BspLcdAdvanceOp(ptOp);
         }
 
         if ((BspTickGetMs() - s_u32OpStartMs) > BSP_LCD_FIELD_TIMEOUT_MS)

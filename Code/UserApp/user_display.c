@@ -21,6 +21,7 @@
  */
 
 #include "user_display.h"
+#include "user_config.h"
 #include "bsp_lcd.h"
 #include "bsp_adc.h"
 #include "bsp_board.h"
@@ -169,7 +170,8 @@ static void UsrDisplayInitState(void)
 
 /**
  * @brief  POWER_ON 状态显示处理：开机页
- * @note   LCD 初始化后先清屏，再显示产品名与版本号，保持约 1s。
+ * @note   清屏与字符串现在都是"入队 + 分批 DMA"，本函数只登记一次内容，
+ *         实际像素由 BspLcdService() 在每个时间片推进，不再阻塞主循环。
  */
 static void UsrDisplayPowerOnState(void)
 {
@@ -191,14 +193,16 @@ static void UsrDisplayPowerOnState(void)
 /**
  * @brief  RUNNING 状态显示处理：实时数据面板
  * @note   采样每 USR_DISPLAY_SAMPLE_MS 一次；
- *         刷新每 USR_DISPLAY_REFRESH_MS 发起一帧（由状态机异步输出）。
+ *         刷新每 USR_DISPLAY_REFRESH_MS 提交一帧字段请求。
+ *         清屏填充与字符串都走分批 DMA，本函数不会长时间阻塞主循环 ——
+ *         这一点很关键，USB-PD 的 500ms 应答窗口依赖主循环及时转起来。
  */
 static void UsrDisplayRunningState(void)
 {
     const tBspAdcDataDef *ptData;
     const tBspUsbPdStatusDef *ptPdStatus;
 
-    /* 进入 RUNNING 的第一次：清屏 + 画静态内容 */
+    /* 进入 RUNNING 的第一次：清屏 + 画静态内容（都是入队操作） */
     if (s_u8ScreenCleared == 0u)
     {
         BspLcdClearScreen(WHITE);
@@ -268,6 +272,11 @@ static void UsrDisplayOffState(void)
  */
 uint16_t UsrDisplayTask(void)
 {
+#if !USER_LCD_ENABLE
+    /* LCD 已关闭：不初始化 ST7789V、不刷屏、不提供 [RUN] 诊断
+     * （由 UsrPdTask / user_time.c 输出）。 */
+    return PT_ENDED;
+#else
     int8_t i = 0;
     static const struct
     {
@@ -324,4 +333,5 @@ uint16_t UsrDisplayTask(void)
         BspLcdService((uint8_t)tSysData.eState);
     }
     PT_END();
+#endif /* USER_LCD_ENABLE */
 }

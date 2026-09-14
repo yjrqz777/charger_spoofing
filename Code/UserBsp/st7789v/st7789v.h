@@ -103,6 +103,50 @@ eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
                                  uint8_t u8Length, uint8_t u8Decimals,
                                  uint16_t fc, uint16_t bc, uint8_t sizey);
 
+/* ==========================================================================
+ * 阻塞绘图的 DMA 分段版本
+ * --------------------------------------------------------------------------
+ * LCD_Fill() 与 LCD_ShowString() 都是逐像素轮询输出：240x135 整屏填充会独占
+ * CPU 约 80ms，足以让主循环里的周期任务（USB-PD 的 500ms 应答窗口）错过时序。
+ * 下面两个接口把同样的绘制改成分段 DMA，由 BspLcdService() 每次推进一块，
+ * 单次占用时间降到 1ms 量级。
+ * ========================================================================== */
+
+/** @brief 每个动态字符串块最多容纳的字符数。 */
+#define LCD_DMA_TEXT_CHUNK_CHARS  (8u)
+
+/**
+ * @brief 渲染一屏整宽填充的一行，并通过 DMA 送出。
+ * @param[in] y       行号（0 起）。
+ * @param[in] u16Color RGB565 颜色。
+ * @retval E_OK   已启动一次 DMA 传输。
+ * @retval E_BUSY 上一次 DMA 未完成。
+ * @note  调用前必须已用 LCD_Address_Set() 设置好整个填充区域的窗口，
+ *        本函数只追加像素数据，不再改窗口。
+ */
+eStatusDef LCD_FillRowDma(uint16_t y, uint16_t u16Color);
+
+/**
+ * @brief 查询是否仍有待推进的整屏填充。
+ * @retval 1 有待完成的行。
+ * @retval 0 填充已结束。
+ */
+uint8_t LCD_FillActive(void);
+
+/**
+ * @brief 渲染一段字符串（最多 LCD_DMA_TEXT_CHUNK_CHARS 字符）并通过 DMA 送出。
+ * @param[in] x,y   起始坐标。
+ * @param[in] p     字符串指针。
+ * @param[in] fc,bc 前景/背景色。
+ * @param[in] sizey 字号（12/16/24/32）。
+ * @retval E_OK    已启动一次 DMA 传输。
+ * @retval E_BUSY  上一次 DMA 未完成。
+ * @retval E_ERROR 参数非法或字号不支持。
+ * @note  本函数自己设置地址窗口；返回值不表示整串画完，调用者按字符推进。
+ */
+eStatusDef LCD_ShowStringChunkDma(uint16_t x, uint16_t y, const char *p,
+                                  uint16_t fc, uint16_t bc, uint8_t sizey);
+
 /* 图片 / 自定义尺寸汉字 */
 void LCD_ShowPicture(uint16_t x, uint16_t y, uint16_t length, uint16_t width, const uint8_t pic[]);
 void LCD_ShowChineseTEST(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizeW, uint8_t sizeH, uint8_t mode);

@@ -29,11 +29,19 @@ extern "C" {
 void BspLcdInit(void);
 
 /**
- * @brief  把整个屏幕填充为指定颜色（阻塞式，直接下发）
+ * @brief  把整个屏幕填充为指定颜色
  * @param[in] u16Color  RGB565 颜色
- * @warning 阻塞约 200ms，仅在初始化或状态切换时调用，禁止放进周期任务。
+ * @note   非阻塞：登记一条填充操作后立即返回，实际像素由 BspLcdService()
+ *         分批 DMA 输出（整屏约 15 次服务，每次约 1ms CPU）。
+ * @warning 若队列里已有未接管的请求内容，本函数会先丢弃它们。
  */
 void BspLcdClearScreen(uint16_t u16Color);
+
+/**
+ * @brief  丢弃尚未被接管的请求帧。
+ * @note   供"清屏 + 重画"这类需要独占一帧的场合使用；不影响正在输出的活动帧。
+ */
+void BspLcdCancelRefresh(void);
 
 /* ===================== 阻塞式直接显示接口 ===================== */
 
@@ -57,7 +65,7 @@ void BspLcdBeginRefresh(uint8_t u8StateId);
 /** @brief 追加：清屏填充 */
 void BspLcdAddFill(uint16_t u16Color);
 
-/** @brief 追加：字符串（阻塞输出，字号 16 时每字符约 576 字节 SPI） */
+/** @brief 追加：字符串（DMA 异步输出，按 LCD_DMA_TEXT_CHUNK_CHARS 分块） */
 void BspLcdAddString(uint16_t u16X, uint16_t u16Y, const char *pcText,
                      uint16_t u16Fc, uint16_t u16Bc, uint8_t u8SizeY);
 
