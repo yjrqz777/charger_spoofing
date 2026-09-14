@@ -1,3 +1,8 @@
+/**
+ * @file bsp_button.c
+ * @brief Implements board button sampling, debounce, and deferred event dispatch.
+ */
+
 /***************************************************************************************************
  * Author: yjrqz777 3210551161@qq.com
  * Date: 2026-01-06 19:59:07
@@ -10,15 +15,25 @@
 #include "bsp_button.h"
 #include "main.h"
 
-// Macro for callback execution with null check
-#define EVENT_CB(ev)   do { if(handle->cb[ev]) handle->cb[ev](handle); } while(0)
-
 // Button handle list head
 static Button* head_handle = NULL;
+static uint8_t u8ButtonScanDivider = 0u;
 
 // Forward declarations
 static void button_handler(Button* handle);
 static inline uint8_t button_read_level(Button* handle);
+
+/**
+ * @brief Queues a button event for dispatch outside interrupt context.
+ * @param[in,out] ptButton Pointer to the button producing the event.
+ * @param[in] eEvent Event to queue.
+ */
+static void BspButtonQueueEvent(Button *ptButton, ButtonEvent eEvent)
+{
+	if ((ptButton != NULL) && (eEvent < BTN_EVENT_COUNT)) {
+		ptButton->u16PendingEvents |= (uint16_t)(1u << (uint8_t)eEvent);
+	}
+}
 
 /**
  * @brief  读取指定按键的 GPIO 电平
@@ -114,6 +129,7 @@ void button_detach(Button* handle, ButtonEvent event)
 ButtonEvent button_get_event(Button* handle)
 {
 	if (!handle) return BTN_NONE_PRESS;
+	if (handle->u8DispatchActive != 0u) return (ButtonEvent)handle->u8DispatchedEvent;
 	return (ButtonEvent)(handle->event);
 }
 
@@ -141,6 +157,8 @@ void button_reset(Button* handle)
 	handle->repeat = 0;
 	handle->event = (uint8_t)BTN_NONE_PRESS;
 	handle->debounce_cnt = 0;
+	handle->u16PendingEvents = 0u;
+	handle->u8DispatchActive = 0u;
 }
 
 /**
@@ -196,7 +214,7 @@ static void button_handler(Button* handle)
 		if (handle->button_level == handle->active_level) {
 			// Button press detected
 			handle->event = (uint8_t)BTN_PRESS_DOWN;
-			EVENT_CB(BTN_PRESS_DOWN);
+			BspButtonQueueEvent(handle, BTN_PRESS_DOWN);
 			handle->ticks = 0;
 			handle->repeat = 1;
 			handle->state = BTN_STATE_PRESS;
@@ -209,13 +227,13 @@ static void button_handler(Button* handle)
 		if (handle->button_level != handle->active_level) {
 			// Button released
 			handle->event = (uint8_t)BTN_PRESS_UP;
-			EVENT_CB(BTN_PRESS_UP);
+			BspButtonQueueEvent(handle, BTN_PRESS_UP);
 			handle->ticks = 0;
 			handle->state = BTN_STATE_RELEASE;
 		} else if (handle->ticks > LONG_TICKS) {
 			// Long press detected
 			handle->event = (uint8_t)BTN_LONG_PRESS_START;
-			EVENT_CB(BTN_LONG_PRESS_START);
+			BspButtonQueueEvent(handle, BTN_LONG_PRESS_START);
 			handle->state = BTN_STATE_LONG_HOLD;
 		}
 		break;
@@ -224,21 +242,21 @@ static void button_handler(Button* handle)
 		if (handle->button_level == handle->active_level) {
 			// Button pressed again
 			handle->event = (uint8_t)BTN_PRESS_DOWN;
-			EVENT_CB(BTN_PRESS_DOWN);
+			BspButtonQueueEvent(handle, BTN_PRESS_DOWN);
 			if (handle->repeat < PRESS_REPEAT_MAX_NUM) {
 				handle->repeat++;
 			}
-			EVENT_CB(BTN_PRESS_REPEAT);
+			BspButtonQueueEvent(handle, BTN_PRESS_REPEAT);
 			handle->ticks = 0;
 			handle->state = BTN_STATE_REPEAT;
 		} else if (handle->ticks > SHORT_TICKS) {
 			// Timeout reached, determine click type
 			if (handle->repeat == 1) {
 				handle->event = (uint8_t)BTN_SINGLE_CLICK;
-				EVENT_CB(BTN_SINGLE_CLICK);
+				BspButtonQueueEvent(handle, BTN_SINGLE_CLICK);
 			} else if (handle->repeat == 2) {
 				handle->event = (uint8_t)BTN_DOUBLE_CLICK;
-				EVENT_CB(BTN_DOUBLE_CLICK);
+				BspButtonQueueEvent(handle, BTN_DOUBLE_CLICK);
 			}
 			handle->state = BTN_STATE_IDLE;
 		}
@@ -248,7 +266,7 @@ static void button_handler(Button* handle)
 		if (handle->button_level != handle->active_level) {
 			// Button released
 			handle->event = (uint8_t)BTN_PRESS_UP;
-			EVENT_CB(BTN_PRESS_UP);
+			BspButtonQueueEvent(handle, BTN_PRESS_UP);
 			if (handle->ticks < SHORT_TICKS) {
 				handle->ticks = 0;
 				handle->state = BTN_STATE_RELEASE;  // Continue waiting for more presses
@@ -265,11 +283,11 @@ static void button_handler(Button* handle)
 		if (handle->button_level == handle->active_level) {
 			// Continue holding
 			handle->event = (uint8_t)BTN_LONG_PRESS_HOLD;
-			EVENT_CB(BTN_LONG_PRESS_HOLD);
+			BspButtonQueueEvent(handle, BTN_LONG_PRESS_HOLD);
 		} else {
 			// Released from long press
 			handle->event = (uint8_t)BTN_PRESS_UP;
-			EVENT_CB(BTN_PRESS_UP);
+			BspButtonQueueEvent(handle, BTN_PRESS_UP);
 			handle->state = BTN_STATE_IDLE;
 		}
 		break;
@@ -333,5 +351,49 @@ void button_ticks(void)
 	Button* target;
 	for (target = head_handle; target; target = target->next) {
 		button_handler(target);
+	}
+}
+
+/**
+ * @brief Advances the button scanner from the TIM3 1 ms interrupt.
+ * @note The button state machine is updated every TICKS_INTERVAL milliseconds.
+ *       Callbacks are queued and are never executed in interrupt context.
+ */
+void BspButtonScanTick(void)
+{
+	u8ButtonScanDivider++;
+	if (u8ButtonScanDivider >= (uint8_t)(TICKS_INTERVAL / BOARD_TICK_MS)) {
+		u8ButtonScanDivider = 0u;
+		button_ticks();
+	}
+}
+
+/**
+ * @brief Dispatches button callbacks queued by the TIM3 interrupt.
+ * @note Call this from the main-loop button task so callbacks may safely log
+ *       messages and operate application state.
+ */
+void BspButtonProcessEvents(void)
+{
+	Button *ptTarget;
+	uint16_t PendingEvents;
+	uint8_t EventIndex;
+
+	for (ptTarget = head_handle; ptTarget != NULL; ptTarget = ptTarget->next) {
+		NVIC_DisableIRQ(TIM3_IRQn);
+		PendingEvents = ptTarget->u16PendingEvents;
+		ptTarget->u16PendingEvents = 0u;
+		NVIC_EnableIRQ(TIM3_IRQn);
+
+		for (EventIndex = 0u; EventIndex < (uint8_t)BTN_EVENT_COUNT; EventIndex++) {
+			if ((PendingEvents & (uint16_t)(1u << EventIndex)) != 0u) {
+				ptTarget->u8DispatchedEvent = EventIndex;
+				ptTarget->u8DispatchActive = 1u;
+				if (ptTarget->cb[EventIndex] != NULL) {
+					ptTarget->cb[EventIndex](ptTarget);
+				}
+				ptTarget->u8DispatchActive = 0u;
+			}
+		}
 	}
 }

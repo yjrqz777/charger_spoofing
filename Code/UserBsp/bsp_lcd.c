@@ -5,17 +5,19 @@
  * @note    字段缓冲式刷新的实现思路：
  *          1) 应用层调用 BspLcdBeginRefresh() 开启一帧，随后用 BspLcdAddXxx()
  *             追加待显示内容，追加只写内存，不碰 SPI；
- *          2) 每个时间片调用 BspLcdService()，每次只用轮询 SPI 输出一个字段；
- *          3) 所有 LCD 传输均为阻塞轮询，不使用 DMA 或 DMA 中断。
+ *          2) 每个时间片调用 BspLcdService()，仅在当前字段完成后推进；
+ *          3) 整数和浮点字段通过 SPI1 TX DMA 异步输出。
  *******************************************************************************
  */
 
 #include "bsp_lcd.h"
 #include "bsp_spi.h"
+#include "bsp_tick.h"
 #include "st7789v/st7789v.h"
 
 /** @brief 一帧内最多允许的待显示操作数 */
 #define BSP_LCD_FIELD_MAX        (12u)
+#define BSP_LCD_FIELD_TIMEOUT_MS (500u)
 
 /** @brief 字段操作类型 */
 typedef enum
@@ -55,15 +57,38 @@ static uint8_t  s_u8RefreshRequested = 0u;     /**< 有新的请求帧待接管 
 static uint8_t  s_u8RefreshInFlight  = 0u;     /**< 正在输出活动帧 */
 static uint8_t  s_u8RequestedStateId = 0xFFu;  /**< 请求帧对应的系统状态 */
 static uint8_t  s_u8ActiveStateId    = 0xFFu;  /**< 活动帧对应的系统状态 */
+static uint32_t s_u32OpStartMs       = 0u;     /**< 当前操作的启动时刻 */
 
 /* ========================================================================== *
  *  内部函数
  * ========================================================================== */
 
 /**
+ * @brief Waits until the LCD DMA buffer is available.
+ * @param[in] u32TimeoutMs Maximum wait time in milliseconds.
+ * @retval 0 The DMA channel is idle.
+ * @retval 1 The wait timed out.
+ */
+static uint8_t BspLcdWaitDmaIdle(uint32_t u32TimeoutMs)
+{
+    uint32_t StartMs;
+
+    StartMs = BspTickGetMs();
+    while (LCD_IsTransferBusy() != 0u)
+    {
+        if ((BspTickGetMs() - StartMs) > u32TimeoutMs)
+        {
+            return 1u;
+        }
+    }
+
+    return 0u;
+}
+
+/**
  * @brief  输出一条操作到 LCD
  * @param[in] ptOp  操作描述
- * @retval 0  输出完成
+ * @retval 0  输出已启动
  * @retval 1  失败
  */
 static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
@@ -80,19 +105,19 @@ static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
             return 0u;
 
         case E_BSP_LCD_OP_UINT:
-            if (LCD_ShowIntNumBuffered(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
-                                       ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
-                                       ptOp->u8SizeY) != E_OK)
+            if (LCD_ShowIntNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
+                                    ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
+                                    ptOp->u8SizeY) != E_OK)
             {
                 return 1u;
             }
             return 0u;
 
         case E_BSP_LCD_OP_FLOAT:
-            if (LCD_ShowFloatNumBuffered(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
-                                         ptOp->u8Length, ptOp->u8Decimals,
-                                         ptOp->u16Fc, ptOp->u16Bc,
-                                         ptOp->u8SizeY) != E_OK)
+            if (LCD_ShowFloatNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
+                                      ptOp->u8Length, ptOp->u8Decimals,
+                                      ptOp->u16Fc, ptOp->u16Bc,
+                                      ptOp->u8SizeY) != E_OK)
             {
                 return 1u;
             }
@@ -101,6 +126,18 @@ static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
         default:
             return 0u;
     }
+}
+
+/**
+ * @brief Reports whether the current LCD operation is complete.
+ * @param[in] ptOp Pointer to the active operation.
+ * @retval 1 The operation is complete.
+ * @retval 0 Its DMA transfer is still active.
+ */
+static uint8_t BspLcdOpFinished(const tBspLcdOpDef *ptOp)
+{
+    (void)ptOp;
+    return (LCD_IsTransferBusy() == 0u) ? 1u : 0u;
 }
 
 /**
@@ -169,14 +206,24 @@ void BspLcdShowString(uint16_t u16X, uint16_t u16Y, const char *pcText,
 void BspLcdShowUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
                     uint8_t u8Length, uint16_t u16Fc, uint16_t u16Bc)
 {
-    (void)LCD_ShowIntNumBuffered(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
+    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
+    {
+        return;
+    }
+
+    (void)LCD_ShowIntNumAsync(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
 }
 
 void BspLcdShowFloat(uint16_t u16X, uint16_t u16Y, float f32Value, uint8_t u8Length,
                      uint8_t u8Decimals, uint16_t u16Fc, uint16_t u16Bc)
 {
-    (void)LCD_ShowFloatNumBuffered(u16X, u16Y, f32Value, u8Length, u8Decimals,
-                                   u16Fc, u16Bc, 24u);
+    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
+    {
+        return;
+    }
+
+    (void)LCD_ShowFloatNumAsync(u16X, u16Y, f32Value, u8Length, u8Decimals,
+                                u16Fc, u16Bc, 24u);
 }
 
 void BspLcdBeginRefresh(uint8_t u8StateId)
@@ -305,7 +352,9 @@ void BspLcdService(uint8_t u8StateId)
         s_u8ActiveStateId    = s_u8RequestedStateId;
         s_u8RefreshInFlight  = (s_u8ActiveCount != 0u) ? 1u : 0u;
         s_u8RefreshRequested = 0u;
-        /* 接管新帧时立即用轮询 SPI 输出第 0 条操作。 */
+        s_u32OpStartMs       = BspTickGetMs();
+
+        /* 接管新帧时立即启动第 0 条操作。 */
         if (s_u8RefreshInFlight != 0u)
         {
             if (BspLcdOutputOp(&s_atActiveOp[0]) != 0u)
@@ -320,23 +369,31 @@ void BspLcdService(uint8_t u8StateId)
     /* 3) 推进当前活动帧 */
     if (s_u8RefreshInFlight != 0u)
     {
-        /* 上一条为阻塞输出，返回时已经完成，直接推进下标。 */
-        s_u8ActiveIndex++;
-
-        if (s_u8ActiveIndex >= s_u8ActiveCount)
+        if (BspLcdOpFinished(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
         {
-            s_u8RefreshInFlight = 0u;
-            s_u8ActiveIndex = 0u;
-            s_u8ActiveCount = 0u;
+            s_u8ActiveIndex++;
+            s_u32OpStartMs = BspTickGetMs();
+
+            if (s_u8ActiveIndex >= s_u8ActiveCount)
+            {
+                s_u8RefreshInFlight = 0u;
+                s_u8ActiveIndex = 0u;
+                s_u8ActiveCount = 0u;
+                return;
+            }
+
+            if (BspLcdOutputOp(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
+            {
+                s_u8ActiveIndex--;
+            }
             return;
         }
 
-        if (BspLcdOutputOp(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
+        if ((BspTickGetMs() - s_u32OpStartMs) > BSP_LCD_FIELD_TIMEOUT_MS)
         {
             s_u8RefreshInFlight = 0u;
             s_u8ActiveIndex     = 0u;
             s_u8ActiveCount     = 0u;
         }
-        return;
     }
 }

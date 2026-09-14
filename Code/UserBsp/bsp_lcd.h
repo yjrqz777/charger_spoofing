@@ -4,7 +4,7 @@
  *******************************************************************************
  * @note    在 ST7789V 绘图接口之上提供"字段缓冲式刷新"：
  *          应用层（user_display.c）先把一帧要显示的内容追加进请求队列，
- *          再由 BspLcdService() 在每个时间片里用轮询 SPI 输出一个字段。
+ *          再由 BspLcdService() 按 DMA 就绪节奏逐条输出。
  *
  *          数据流：
  *            BspLcdBeginRefresh() -> BspLcdAddXxx()... -> (每时间片) BspLcdService()
@@ -61,16 +61,16 @@ void BspLcdAddFill(uint16_t u16Color);
 void BspLcdAddString(uint16_t u16X, uint16_t u16Y, const char *pcText,
                      uint16_t u16Fc, uint16_t u16Bc, uint8_t u8SizeY);
 
-/** @brief 追加：无符号整数（字段缓冲后轮询输出） */
+/** @brief 追加：无符号整数（DMA 异步输出） */
 void BspLcdAddUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
                    uint8_t u8Length, uint16_t u16Color);
 
-/** @brief 追加：浮点数（字段缓冲后轮询输出） */
+/** @brief 追加：浮点数（DMA 异步输出） */
 void BspLcdAddFloat(uint16_t u16X, uint16_t u16Y, float f32Value,
                     uint8_t u8Length, uint8_t u8Decimals, uint16_t u16Color);
 
 /**
- * @brief  字段刷新服务：每个时间片用轮询 SPI 输出一个字段
+ * @brief  字段刷新服务：按 DMA 就绪节奏逐条输出。
  * @param[in] u8StateId  当前状态标识，与发起刷新时不一致则丢弃过期帧
  * @note   每个时间片调用一次；整帧输出完毕后自动等待下一轮 BeginRefresh。
  */

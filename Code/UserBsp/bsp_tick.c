@@ -12,6 +12,7 @@
  */
 
 #include "bsp_tick.h"
+#include "bsp_button.h"
 #include "Task.h"
 
 /* ========================================================================== *
@@ -76,7 +77,7 @@ uint32_t BspTickGetMs(void)
 /**
  * @brief  TIM3 更新中断服务函数（1ms 系统节拍）
  * @note   RISC-V 中断必须带 WCH-Interrupt-fast 属性（与 ch32x035_it.c 写法一致）。
- *         ISR 内只做：清标志 + 累加毫秒 + 递减任务倒计时，保持极短执行时间。
+ *         ISR 同时驱动按键 GPIO 采样和消抖，按键回调仍在主循环执行。
  */
 void TIM3_IRQHandler(void) __attribute__((interrupt("WCH-Interrupt-fast")));
 void TIM3_IRQHandler(void)
@@ -87,5 +88,6 @@ void TIM3_IRQHandler(void)
 
         s_u32TickMs++;
         TASK_TICK_UPDATE();
+        BspButtonScanTick();
     }
 }

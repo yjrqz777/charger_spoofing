@@ -6,9 +6,9 @@
  *          提供点、线、矩形、圆、汉字、字符、字符串、数字、图片等绘图接口
  *
  *          硬件接口（已移植到 CH32X035 + WCH 标准外设库）：
- *            - GPIO 模拟 SPI：SCK = PA5，MOSI(SDA) = PA7
+ *            - SPI1 主机 Mode 2：SCK = PA5，MOSI(SDA) = PA7
  *            - GPIO：CS = PA3，DC = PA2，RES = PA1
- *            - LCD 数据使用 GPIO 模拟 Mode 2，不使用 SPI1 或 DMA
+ *            - SPI1_TX 使用 DMA1 通道 3 异步发送像素缓冲区
  *          引脚定义来自 Code/main.h，与原理图 NETLIST 一致。
  *******************************************************************************
  */
@@ -73,6 +73,7 @@
 /* 外部函数声明 */
 extern void st7789v_init(void);
 extern void LCD_color_point(uint16_t x1, uint16_t y1, uint16_t color);
+uint8_t LCD_IsTransferBusy(void);
 
 /* 绘图接口 */
 void LCD_Fill(uint16_t xsta, uint16_t ysta, uint16_t xend, uint16_t yend, uint16_t color);
@@ -95,12 +96,12 @@ void LCD_ShowString(uint16_t x, uint16_t y, const uint8_t *p, uint16_t fc, uint1
 /* 数字显示 */
 uint32_t mypow(uint8_t m, uint8_t n);
 void LCD_ShowIntNum(uint16_t x, uint16_t y, uint16_t num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
-eStatusDef LCD_ShowIntNumBuffered(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
-                                  uint16_t fc, uint16_t bc, uint8_t sizey);
+eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
+                               uint16_t fc, uint16_t bc, uint8_t sizey);
 void LCD_ShowFloatNum1(uint16_t x, uint16_t y, float num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
-eStatusDef LCD_ShowFloatNumBuffered(uint16_t x, uint16_t y, float fValue,
-                                    uint8_t u8Length, uint8_t u8Decimals,
-                                    uint16_t fc, uint16_t bc, uint8_t sizey);
+eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
+                                 uint8_t u8Length, uint8_t u8Decimals,
+                                 uint16_t fc, uint16_t bc, uint8_t sizey);
 
 /* 图片 / 自定义尺寸汉字 */
 void LCD_ShowPicture(uint16_t x, uint16_t y, uint16_t length, uint16_t width, const uint8_t pic[]);

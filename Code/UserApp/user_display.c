@@ -2,7 +2,7 @@
  * @file    user_display.c
  * @brief   用户显示任务实现 — 单页实时数据面板
  *******************************************************************************
- * @note    屏幕：240x135 横屏（ST7789V，GPIO 模拟 SPI）
+ * @note    屏幕：240x135 横屏（ST7789V，SPI1 + DMA）
  *
  *          界面布局（24 号字，每行 24 像素）：
  *            +--------------------------------------------+
@@ -13,9 +13,9 @@
  *            | POUT   15.18 W                             |  第 4 行 y=106
  *            +--------------------------------------------+
  *
- *          刷新策略（配合 BspLcdService 的分时字段状态机）：
+ *          刷新策略（配合 BspLcdService 的异步字段状态机）：
  *            - 每 100ms 采样一次 ADC；
- *            - 每 100ms 组装一帧显示请求，由 BspLcdService() 每个时间片输出一条；
+ *            - 每 100ms 组装一帧显示请求，由 BspLcdService() 逐条 DMA 输出；
  *            - 整屏填充只在进入状态时执行一次（阻塞约 200ms）。
  *******************************************************************************
  */
@@ -56,7 +56,7 @@ static uint16_t s_u16DiagnosticAcc = 0u;
 
 /**
  * @brief  初始化显示模块
- * @note   初始化 LCD 与 GPIO 模拟 SPI。包含初始化延时，仅上电时执行一次。
+ * @note   初始化 LCD、SPI1 与 TX DMA。包含初始化延时，仅上电时执行一次。
  */
 void UsrDisplayInit(void)
 {
@@ -197,11 +197,12 @@ static void UsrDisplayRunningState(void)
     {
         s_u16DiagnosticAcc = 0u;
         ptData = BspAdcGetData();
-        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x spi_error=%u\r\n",
+        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x dma_idle=%u spi_error=%u\r\n",
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VBUS],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VOUT],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_IBUS],
                (unsigned int)BspButtonGetRawMask(),
+               (unsigned int)BspSpiIsIdle(),
                (unsigned int)BspSpiHasError());
     }
 }

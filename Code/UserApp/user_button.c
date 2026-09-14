@@ -193,8 +193,8 @@ uint8_t UsrButtonGetLastEvent(uint8_t u8ButtonId)
 /**
  * @brief  Protothread 按键扫描协程任务
  * @return PT 状态码
- * @note   首次进入时初始化按键，之后以 BUTTON_TIME_MS 为周期调用 button_ticks()
- *         扫描按键状态机。按键库要求周期约 5ms（TICKS_INTERVAL）。
+ * @note   按键采样和消抖由 TIM3 中断驱动。本任务仅在主循环
+ *         执行已排队的按键回调。
  */
 uint16_t UsrButtonTask(void)
 {
@@ -206,7 +206,7 @@ uint16_t UsrButtonTask(void)
     while (1)
     {
         PT_WAIT_UNTIL(BUTTON_TIME_MS / OS_TICK_MS);
-        button_ticks();
+        BspButtonProcessEvents();
     }
 
     PT_END();

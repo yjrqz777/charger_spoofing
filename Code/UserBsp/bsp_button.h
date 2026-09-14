@@ -1,3 +1,8 @@
+/**
+ * @file bsp_button.h
+ * @brief Declares the board button scanner and multi-button interfaces.
+ */
+
 /***************************************************************************************************
  * Author: yjrqz777 3210551161@qq.com
  * Date: 2026-01-06 19:59:07
@@ -8,18 +13,18 @@
  * @YJRQZ777
 ***************************************************************************************************/
 
-#ifndef _MULTI_BUTTON_H_
-#define _MULTI_BUTTON_H_
+#ifndef __BSP_BUTTON_H__
+#define __BSP_BUTTON_H__
 
 #include <stdint.h>
 #include <string.h>
 
 // Configuration constants - can be modified according to your needs
-#define TICKS_INTERVAL          5    // ms - timer interrupt interval
-#define DEBOUNCE_TICKS          2    // MAX 7 (0 ~ 7) - debounce filter depth
-#define SHORT_TICKS             (100 / TICKS_INTERVAL)   // short press threshold
-#define LONG_TICKS              (1000 / TICKS_INTERVAL)  // long press threshold
-#define PRESS_REPEAT_MAX_NUM    2   // maximum repeat counter value
+#define TICKS_INTERVAL       (5u)                         /* Scanner interval in milliseconds. */
+#define DEBOUNCE_TICKS       (2u)                         /* Debounce samples; maximum is 7. */
+#define SHORT_TICKS          (100u / TICKS_INTERVAL)      /* Multi-click interval. */
+#define LONG_TICKS           (1000u / TICKS_INTERVAL)     /* Long-press interval. */
+#define PRESS_REPEAT_MAX_NUM (2u)                         /* Maximum repeat count. */
 
 // Forward declaration
 typedef struct _Button Button;
@@ -61,16 +66,21 @@ struct _Button {
 	uint8_t  button_id;                 // button identifier
 	uint8_t  (*hal_button_level)(uint8_t button_id);  // HAL function to read GPIO
 	BtnCallback cb[BTN_EVENT_COUNT];    // callback function array
+	volatile uint16_t u16PendingEvents; // events queued by the timer interrupt
+	uint8_t u8DispatchedEvent;          // event currently dispatched in main context
+	uint8_t u8DispatchActive;           // callback dispatch is active
 	Button* next;                       // next button in linked list
 };
 
 #ifdef __cplusplus
 extern "C" {
-#endif
+#endif /* __BSP_BUTTON_H__ */
 
 // First-party board wrapper API
 uint8_t BspButtonReadLevel(uint8_t u8ButtonId);
 uint8_t BspButtonGetRawMask(void);
+void BspButtonScanTick(void);
+void BspButtonProcessEvents(void);
 
 // Generic multi-button public API
 void button_init(Button* handle, uint8_t(*pin_level)(uint8_t), uint8_t active_level, uint8_t button_id);

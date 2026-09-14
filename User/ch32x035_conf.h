@@ -15,6 +15,7 @@
 #include "ch32x035_adc.h"
 #include "ch32x035_awu.h"
 #include "ch32x035_dbgmcu.h"
+#include "ch32x035_dma.h"
 #include "ch32x035_exti.h"
 #include "ch32x035_flash.h"
 #include "ch32x035_gpio.h"
