@@ -1,0 +1,132 @@
+/**
+ * @file    st7789v.h
+ * @brief   ST7789V LCD 驱动头文件 — SPI 接口 240×135 彩色液晶屏
+ *******************************************************************************
+ * @note    支持 4 种显示方向（横屏/竖屏），16-bit RGB565 色彩
+ *          提供点、线、矩形、圆、汉字、字符、字符串、数字、图片等绘图接口
+ *
+ *          硬件接口（已移植到 CH32X035 + WCH 标准外设库）：
+ *            - SPI1 主机：SCK = PA4，MOSI(SDA) = PA7
+ *            - GPIO：CS = PA2，DC = PA1，RES = PA0
+ *            - SPI1_TX 的 DMA 走 DMA1 通道 3（见 bsp_spi.c）
+ *          引脚定义来自 Code/main.h，与原理图 NETLIST 一致。
+ *******************************************************************************
+ */
+
+#ifndef __ST7789V_H
+#define __ST7789V_H
+#include "main.h"
+#include "bsp_spi.h"
+
+#include "stdio.h"
+
+/* 显示驱动错误码类型别名（沿用旧签名命名，实为 WCH 库返回类型） */
+typedef uint8_t HAL_StatusTypeDef;
+#ifndef HAL_OK
+#define HAL_OK      0u   /**< 操作成功 */
+#endif
+#ifndef HAL_ERROR
+#define HAL_ERROR   1u   /**< 操作失败 */
+#endif
+#ifndef HAL_BUSY
+#define HAL_BUSY    2u   /**< 外设忙 */
+#endif
+#ifndef HAL_TIMEOUT
+#define HAL_TIMEOUT 3u   /**< 超时 */
+#endif
+
+/* LCD 硬件控制引脚
+ * 注意：本板 N114-2413THBIG01-H13 的背光 LEDK 硬件直接接地（常亮），无背光控制脚 */
+#define LCD_RST(x)  do { if (x) { GPIO_SetBits(LCD_RES_PORT, LCD_RES_PIN); } else { GPIO_ResetBits(LCD_RES_PORT, LCD_RES_PIN); } } while (0)
+#define LCD_DC(x)   do { if (x) { GPIO_SetBits(LCD_DC_PORT,  LCD_DC_PIN);  } else { GPIO_ResetBits(LCD_DC_PORT,  LCD_DC_PIN);  } } while (0)
+#define LCD_CS(x)   do { if (x) { GPIO_SetBits(LCD_CS_PORT,  LCD_CS_PIN);  } else { GPIO_ResetBits(LCD_CS_PORT,  LCD_CS_PIN);  } } while (0)
+
+/* SPI 数据/命令标识 */
+#define CMD  0
+#define DATA 1
+
+/* 显示偏移校正 */
+#define WIDTH_OFFSET  0
+#define HIGH_OFFSET   20
+
+/** @brief 显示方向：0/1=竖屏(135×240)，2/3=横屏(240×135) */
+#define USE_HORIZONTAL 3
+
+#if USE_HORIZONTAL==0||USE_HORIZONTAL==1
+#define LCD_W  135
+#define LCD_H  240
+#else
+#define LCD_W  240
+#define LCD_H  135
+#endif
+
+#define LCD_BUFF_SIZE  (LCD_W * LCD_H)
+
+/* 颜色定义（RGB565 格式） */
+#define WHITE          (uint16_t)0xFFFF
+#define BLACK          (uint16_t)0x0000
+#define BLUE           (uint16_t)0x001F
+#define BRED           (uint16_t)0XF81F
+#define GRED           (uint16_t)0XFFE0
+#define GBLUE          (uint16_t)0X07FF
+#define RED            (uint16_t)0xF800
+#define MAGENTA        (uint16_t)0xF81F
+#define GREEN          (uint16_t)0x07E0
+#define CYAN           (uint16_t)0x7FFF
+#define YELLOW         (uint16_t)0xFFE0
+#define BROWN          (uint16_t)0XBC40
+#define BRRED          (uint16_t)0XFC07
+#define GRAY           (uint16_t)0X8430
+#define DARKBLUE       (uint16_t)0X01CF
+#define LIGHTBLUE      (uint16_t)0X7D7C
+#define GRAYBLUE       (uint16_t)0X5458
+#define LIGHTGREEN     (uint16_t)0X841F
+#define LGRAY          (uint16_t)0XC618
+#define LGRAYBLUE      (uint16_t)0XA651
+#define LBBLUE         (uint16_t)0X2B12
+
+/* 外部函数声明 */
+extern void st7789v_init(void);
+extern void LCD_color_point(uint16_t x1, uint16_t y1, uint16_t color);
+
+/**
+ * @brief  查询 LCD 的 DMA 字段传输是否仍在进行
+ * @retval 1  空闲，可发起下一个字段
+ * @retval 0  正在传输
+ * @note   由 bsp_lcd.c 的字段刷新状态机使用。
+ */
+uint8_t LCD_IsDmaBusy(void);
+
+/* 绘图接口 */
+void LCD_Fill(uint16_t xsta, uint16_t ysta, uint16_t xend, uint16_t yend, uint16_t color);
+void LCD_DrawPoint(uint16_t x, uint16_t y, uint16_t color);
+void LCD_DrawLine(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
+void LCD_DrawRectangle(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color);
+void Draw_Circle(uint16_t x0, uint16_t y0, uint8_t r, uint16_t color);
+
+/* 汉字显示（12×12 / 16×16 / 24×24 / 32×32） */
+void LCD_ShowChinese(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+void LCD_ShowChinese12x12(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+void LCD_ShowChinese16x16(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+void LCD_ShowChinese24x24(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+void LCD_ShowChinese32x32(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+
+/* ASCII 字符 / 字符串 */
+void LCD_ShowChar(uint16_t x, uint16_t y, uint8_t num, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+void LCD_ShowString(uint16_t x, uint16_t y, const uint8_t *p, uint16_t fc, uint16_t bc, uint8_t sizey, uint8_t mode);
+
+/* 数字显示 */
+uint32_t mypow(uint8_t m, uint8_t n);
+void LCD_ShowIntNum(uint16_t x, uint16_t y, uint16_t num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
+HAL_StatusTypeDef LCD_ShowIntNumDma(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
+                                    uint16_t fc, uint16_t bc, uint8_t sizey);
+void LCD_ShowFloatNum1(uint16_t x, uint16_t y, float num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
+HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
+                                       uint8_t u8Length, uint8_t u8Decimals,
+                                       uint16_t fc, uint16_t bc, uint8_t sizey);
+
+/* 图片 / 自定义尺寸汉字 */
+void LCD_ShowPicture(uint16_t x, uint16_t y, uint16_t length, uint16_t width, const uint8_t pic[]);
+void LCD_ShowChineseTEST(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizeW, uint8_t sizeH, uint8_t mode);
+
+#endif /* __ST7789V_H */
