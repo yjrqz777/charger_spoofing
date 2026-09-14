@@ -76,10 +76,10 @@ static void UsrButtonRecordEvent(Button *ptButton)
     eEvent = button_get_event(ptButton);
     au8ButtonLastEvent[Index] = (uint8_t)eEvent;
 
-    SEGGER_RTT_printf(0, "KEY%u event:%u repeat:%u\r\n",
-                      ptButton->button_id,
-                      (uint8_t)eEvent,
-                      button_get_repeat_count(ptButton));
+    printf("KEY%u event:%u repeat:%u\r\n",
+           ptButton->button_id,
+           (uint8_t)eEvent,
+           button_get_repeat_count(ptButton));
 }
 
 static void UsrButtonToggleCallback(Button *ptButton)

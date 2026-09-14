@@ -36,6 +36,7 @@ void UsrTimeUpdate(void)
     if ((tSysData.eState == E_SYS_STATE_INIT) && (tSysData.u32PowerOnTimes > 100u))
     {
         tSysData.eState = E_SYS_STATE_POWER_ON;
+        printf("[SYSTEM] INIT -> POWER_ON\r\n");
     }
 
     if (tSysData.eState < E_SYS_STATE_RUNNING)

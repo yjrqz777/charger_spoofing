@@ -73,6 +73,7 @@ void BspAdcInit(void)
 
     memset(&ADC_InitStructure, 0, sizeof(ADC_InitStructure));
     memset(&tBspAdcData, 0, sizeof(tBspAdcData));
+    printf("[ADC] init: VOUT=IN0 IBUS=IN4 VBUS=IN10 clock=SYSCLK/6\r\n");
 
     /* 1) 时钟：使能 ADC1；ADC 时钟 = SYSCLK/6，48MHz 下为 8MHz */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
@@ -96,6 +97,8 @@ void BspAdcInit(void)
     {
         tBspAdcData.u16Raw[u8Index] = 0u;
     }
+
+    printf("[ADC] ready\r\n");
 }
 
 uint8_t BspAdcReadRaw(eBspAdcChannelDef eChannel, uint16_t *pu16Raw)

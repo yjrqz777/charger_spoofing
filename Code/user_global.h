@@ -15,8 +15,6 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "SEGGER_RTT.h"
-
 #define M_PI (3.14159265f)
 #define M_2PI (2.0f * M_PI)
 #define BIT(n)  (1U << (n)) /* 单个位掩码*/

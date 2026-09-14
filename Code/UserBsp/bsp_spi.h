@@ -59,6 +59,13 @@ eStatusDef BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len);
  */
 uint8_t BspSpiIsIdle(void);
 
+/**
+ * @brief Reports whether a polling SPI timeout has occurred.
+ * @retval 1 A TXE or BSY timeout occurred.
+ * @retval 0 No polling timeout has occurred.
+ */
+uint8_t BspSpiHasError(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -24,6 +24,8 @@
 #include "bsp_lcd.h"
 #include "bsp_adc.h"
 #include "bsp_board.h"
+#include "bsp_button.h"
+#include "bsp_spi.h"
 #include "st7789v/st7789v.h"
 
 /* ---- 布局常量 ---- */
@@ -38,6 +40,9 @@
 #define DISPLAY_VALUE_X         (72u)    /**< 数值 X（24 号字，6 字符宽 72px） */
 #define DISPLAY_EN_X            (168u)   /**< 开关状态 X */
 
+/** @brief Runtime diagnostic log interval in milliseconds. */
+#define DISPLAY_DIAGNOSTIC_INTERVAL_MS (1000u)
+
 /** @brief 进入 RUNNING 前，整屏只填充一次 */
 static uint8_t s_u8ScreenCleared = 0u;
 
@@ -47,6 +52,7 @@ static uint8_t s_u8StaticDrawn = 0u;
 /** @brief 采样与刷新的时间累加器（单位 ms） */
 static uint16_t s_u16SampleAcc = 0u;
 static uint16_t s_u16RefreshAcc = 0u;
+static uint16_t s_u16DiagnosticAcc = 0u;
 
 /**
  * @brief  初始化显示模块
@@ -54,12 +60,16 @@ static uint16_t s_u16RefreshAcc = 0u;
  */
 void UsrDisplayInit(void)
 {
+    printf("[DISPLAY] initialization begin\r\n");
     BspLcdInit();
+    printf("[DISPLAY] initialization end, spi_error=%u\r\n",
+           (unsigned int)BspSpiHasError());
 
     s_u8ScreenCleared = 0u;
     s_u8StaticDrawn   = 0u;
     s_u16SampleAcc    = 0u;
     s_u16RefreshAcc   = 0u;
+    s_u16DiagnosticAcc = 0u;
 }
 
 /**
@@ -178,6 +188,20 @@ static void UsrDisplayRunningState(void)
         ptData = BspAdcGetData();
         UsrDisplayRefreshFrame(ptData);
     }
+
+    s_u16DiagnosticAcc += USR_DISPLAY_TASK_INTERVAL_MS;
+    if (s_u16DiagnosticAcc >= DISPLAY_DIAGNOSTIC_INTERVAL_MS)
+    {
+        s_u16DiagnosticAcc = 0u;
+        ptData = BspAdcGetData();
+        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x dma_idle=%u spi_error=%u\r\n",
+               (unsigned int)ptData->u16Raw[E_BSP_ADC_VBUS],
+               (unsigned int)ptData->u16Raw[E_BSP_ADC_VOUT],
+               (unsigned int)ptData->u16Raw[E_BSP_ADC_IBUS],
+               (unsigned int)BspButtonGetRawMask(),
+               (unsigned int)BspSpiIsIdle(),
+               (unsigned int)BspSpiHasError());
+    }
 }
 
 /**
@@ -225,6 +249,7 @@ uint16_t UsrDisplayTask(void)
 
             if (eLastState != tSysData.eState)
             {
+                printf("[DISPLAY] state=%u\r\n", (unsigned int)tSysData.eState);
                 if (eLastState != E_SYS_STATE_MAX)
                 {
                     s_u8ScreenCleared = 0u;

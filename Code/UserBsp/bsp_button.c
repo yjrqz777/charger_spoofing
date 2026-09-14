@@ -26,7 +26,7 @@ static inline uint8_t button_read_level(Button* handle);
  * @return 引脚电平（1 = 高/未按下，0 = 低/按下）
  * @note   使用 CH32X035 WCH 标准外设库读取 GPIO 输入电平。
  *         引脚定义来自 Code/main.h：
- *           KEY1 = PB3，KEY2 = PB7，KEY3 = PB6（本板共 3 个按键）
+ *           KEY1 = PB3，KEY2 = PB4，KEY3 = PB6（本板共 3 个按键）
  *         按键为低电平有效（外部 10k 上拉 + 10nF 消抖）。
  */
 uint8_t BspButtonReadLevel(uint8_t u8ButtonId)

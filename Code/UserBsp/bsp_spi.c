@@ -21,6 +21,9 @@
 /** @brief DMA 空闲标志：1 = 可发起新传输，0 = 正在传输 */
 static volatile uint8_t s_u8SpiDmaIdle = 1u;
 
+/** @brief SPI polling error flag. */
+static uint8_t s_u8SpiError = 0u;
+
 /** @brief 单字节阻塞发送的超时计数上限（防止外设异常时死等） */
 #define BSP_SPI_TIMEOUT_COUNT (0x100000u)
 
@@ -35,6 +38,8 @@ void BspSpiInit(void)
     memset(&SPI_InitStructure,  0, sizeof(SPI_InitStructure));
     memset(&DMA_InitStructure,  0, sizeof(DMA_InitStructure));
     memset(&NVIC_InitStructure, 0, sizeof(NVIC_InitStructure));
+    s_u8SpiDmaIdle = 1u;
+    s_u8SpiError = 0u;
 
     /* 1) 时钟：SPI1 在 APB2；DMA1 在 AHB */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_SPI1, ENABLE);
@@ -93,16 +98,33 @@ void BspSpiInit(void)
 
     /* 8) SPI 的 DMA 发送请求先关闭，由 BspSpiWriteBufferDma 按需开启 */
     SPI_I2S_DMACmd(SPI1, SPI_I2S_DMAReq_Tx, DISABLE);
+
+    printf("[SPI] SPI1 ready: 1-line TX mode0 /4, SCK=PA5 MOSI=PA7\r\n");
+    printf("[SPI] CTLR1=%04x CTLR2=%04x STATR=%04x\r\n",
+           (unsigned int)SPI1->CTLR1, (unsigned int)SPI1->CTLR2,
+           (unsigned int)SPI1->STATR);
 }
 
 void BspSpiWriteByte(uint8_t u8Data)
 {
     uint32_t u32Timeout = BSP_SPI_TIMEOUT_COUNT;
 
+    if (s_u8SpiError != 0u)
+    {
+        return;
+    }
+
     /* 等待发送缓冲区空 */
     while ((SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_TXE) == RESET) && (u32Timeout != 0u))
     {
         u32Timeout--;
+    }
+
+    if (u32Timeout == 0u)
+    {
+        s_u8SpiError = 1u;
+        printf("[SPI][ERR] TXE timeout, STATR=%04x\r\n", (unsigned int)SPI1->STATR);
+        return;
     }
 
     SPI_I2S_SendData(SPI1, u8Data);
@@ -112,6 +134,12 @@ void BspSpiWriteByte(uint8_t u8Data)
     while ((SPI_I2S_GetFlagStatus(SPI1, SPI_I2S_FLAG_BSY) != RESET) && (u32Timeout != 0u))
     {
         u32Timeout--;
+    }
+
+    if (u32Timeout == 0u)
+    {
+        s_u8SpiError = 1u;
+        printf("[SPI][ERR] BSY timeout, STATR=%04x\r\n", (unsigned int)SPI1->STATR);
     }
 }
 
@@ -132,7 +160,7 @@ void BspSpiWriteBufferBlocking(const uint8_t *pu8Data, uint16_t u16Len)
 
 eStatusDef BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len)
 {
-    if ((pu8Data == 0) || (u16Len == 0u))
+    if ((pu8Data == 0) || (u16Len == 0u) || (s_u8SpiError != 0u))
     {
         return E_ERROR;
     }
@@ -160,6 +188,16 @@ eStatusDef BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len)
 uint8_t BspSpiIsIdle(void)
 {
     return s_u8SpiDmaIdle;
+}
+
+/**
+ * @brief Reports whether a polling transfer timed out.
+ * @retval 1 A polling timeout occurred.
+ * @retval 0 No polling timeout occurred.
+ */
+uint8_t BspSpiHasError(void)
+{
+    return s_u8SpiError;
 }
 
 /**

@@ -225,6 +225,7 @@ void LCD_Fill(uint16_t xsta,uint16_t ysta,uint16_t xend,uint16_t yend,uint16_t c
  */
 void st7789v_init(void)
 {
+    printf("[LCD] ST7789V init begin\r\n");
     LCD_CS(0);
     Delay_Ms(100);
     LCD_RST(1);
@@ -233,10 +234,12 @@ void st7789v_init(void)
     Delay_Ms(100);
     LCD_RST(1);
     Delay_Ms(100);
+    printf("[LCD] hardware reset released\r\n");
 
     /* 退出睡眠模式 */
     LCD_Write_Cmd(0x11);
     Delay_Ms(120);
+    printf("[LCD] sleep-out sent\r\n");
     ST7789V_SetDir(USE_HORIZONTAL);
 //    LCD_Write_Cmd(0x36);
 //    LCD_Write_Data(0x00);
@@ -244,7 +247,7 @@ void st7789v_init(void)
 
 
     LCD_Write_Cmd(0x3a);
-    LCD_Write_Data(0x05); // 0x55
+    LCD_Write_Data(0x55); /* 16-bit RGB565 for control and RGB interfaces. */
     //--------------------------------ST7789V Frame rate setting-----------------
 
     LCD_Write_Cmd(0xb2);
@@ -307,8 +310,11 @@ void st7789v_init(void)
 
     LCD_Write_Cmd(0x21);
     LCD_Write_Cmd(0x29);
+    Delay_Ms(20);
+    printf("[LCD] display-on sent, filling test background\r\n");
 
     LCD_Fill(0, 0, 240, 135,WHITE);
+    printf("[LCD] init complete, spi_error=%u\r\n", (unsigned int)BspSpiHasError());
 }
 
 

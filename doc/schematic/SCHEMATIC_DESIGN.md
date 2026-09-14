@@ -116,7 +116,7 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 
 ## 3. MCU `U2 = CH32X035G8U6` 完整引脚网络表
 
-主控为 CH32X035G8U6（QFN-28 + 裸焊盘 29 = GND）。资料上另有 `USB1` 引出的 `USB-DP/USB-DM` 只到 ESD 与座子，**未接 MCU**。
+主控为 CH32X035G8U6（QFN-28 + 裸焊盘 29 = GND）。`USB-DP/USB-DM` 分别连接 MCU 的 PC17/UDP 与 PC16/UDM。
 
 | Pin | 引脚复用名（图纸原文） | 网络 | 备注 |
 |---:|---|---|---|
@@ -134,10 +134,10 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 | 12 | PA7/MOSI/T3C2/T1C1N_/TX1_/O2P0/A7 | LCD_SDA | SPI 数据 |
 | 13 | PB0/TX4/T1C2N_/O1P0/A8 | —（悬空） | |
 | 14 | PB3/TX3/T2C3_/T2C3N_/O2P1 | KEY-1 | 按键 1（低有效） |
-| 15 | PB4/T2C4_/T3C1_/T2BK_/RX3/O1P2 | —（悬空） | |
+| 15 | PB4/T2C4_/T3C1_/T2BK_/RX3/O1P2 | KEY-2 | 按键 2 |
 | 16 | PB5/O1O1/T3C2_/T1BK | —（悬空） | |
 | 17 | PB6/T1C1N/CTS3/O1N1 | KEY-3 | 按键 3 |
-| 18 | PB7/T1C2N/RTS3_/O2P2 | KEY-2 | 按键 2 |
+| 18 | PB7/T1C2N/RTS3_/O2P2 | —（悬空） | |
 | 19 | PB8/T1C3N/O1P1 | LED | 板载指示灯（经 LED1 + R37 100Ω 到 GND） |
 | 20 | PB9/T1C1/MCO/TX4_ | WS2812 | 4 颗灯珠数据 |
 | 21 | PB10/TX1/T1C2 | LOG-TX | 经 R34 100Ω 到 H2 |
@@ -145,8 +145,8 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 | 23 | PB12/T1C4_/T2C2N_ | VOUT-EN | 输出开关使能 |
 | 24 | PC19/DCK/T2C1_/T3C1_/I2C_/RX3_/C1P0 | MCU-DCK | 经 R27 100Ω 到 H1（SWD 时钟） |
 | 25 | PC18/DIO/TX3_/T2C1N_/T3C2_/I2C_/T1ET_ | MCU-DIO | 经 R28 100Ω 到 H1（SWD 数据） |
-| 26 | PC16/UDM/T1C4/TX4_/I2C_/RX4_/CTS1/PC11 | —（悬空） | |
-| 27 | PC17/UDP/RTS1/TX4_/I2C_/RX4_/T1ET/PC10 | —（悬空） | |
+| 26 | PC16/UDM/T1C4/TX4_/I2C_/RX4_/CTS1/PC11 | USB-DM | USB 数据负线 |
+| 27 | PC17/UDP/RTS1/TX4_/I2C_/RX4_/T1ET/PC10 | USB-DP | USB 数据正线 |
 | 28 | PC14/CC1/T1C3_/T2C2_ | USB-CC1 | PD 协商用 CC1 |
 | 29 | GND（裸焊盘） | GND | |
 
@@ -225,7 +225,7 @@ Q4 发射极接 GND，集电极经 R23 100Ω → BUZZER1；蜂鸣器另一端接
 |---|---:|---|
 | 3V3 | 15 | DCDC1 输出，全板数字/模拟供电 |
 | USB-VBUS | 5 | Type-C VBUS |
-| USB-DP / USB-DM | 4 / 4 | Type-C 数据线（仅座子+ESD） |
+| USB-DP / USB-DM | 5 / 5 | Type-C 数据线、ESD 与 MCU USB 引脚 |
 | USB-CC1 / USB-CC2 | 3 / 3 | CC 线（座子、ESD、MCU） |
 | GND | 多处 | 地 |
 | VOUT | 2 | 输出开关后电压 |

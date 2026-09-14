@@ -37,6 +37,7 @@ void UsrSystemInit(void)
 
     /* ADC 采样初始化 */
     BspAdcInit();
+    printf("[SYSTEM] initialized, state=INIT\r\n");
 }
 
 void UsrSystemUpdate(void)
@@ -49,6 +50,7 @@ void UsrSystemUpdate(void)
         {
             tSysData.eState    = E_SYS_STATE_RUNNING;
             s_u32PowerOnHoldMs = 0u;
+            printf("[SYSTEM] POWER_ON -> RUNNING\r\n");
         }
     }
 }

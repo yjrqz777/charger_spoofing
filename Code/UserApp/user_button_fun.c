@@ -21,14 +21,14 @@ void UsrButtonOutputToggle(Button *ptButton)
         /* 当前为导通 -> 关断，并熄灭指示灯 */
         BspBoardSetVoutEnable(0u);
         BspBoardSetLed(0u);
-        SEGGER_RTT_printf(0, "VOUT-EN -> OFF\r\n");
+        printf("VOUT-EN -> OFF\r\n");
     }
     else
     {
         /* 当前为关断 -> 导通，并点亮指示灯 */
         BspBoardSetVoutEnable(1u);
         BspBoardSetLed(1u);
-        SEGGER_RTT_printf(0, "VOUT-EN -> ON\r\n");
+        printf("VOUT-EN -> ON\r\n");
     }
 }
 
@@ -37,7 +37,7 @@ void UsrButtonValueDec(Button *ptButton)
     (void)ptButton;
 
     /* 预留：后续如需可调参数（如采样周期、屏幕亮度等）在此实现减操作 */
-    SEGGER_RTT_printf(0, "KEY2 value -\r\n");
+    printf("KEY2 value -\r\n");
 }
 
 void UsrButtonValueInc(Button *ptButton)
@@ -45,5 +45,5 @@ void UsrButtonValueInc(Button *ptButton)
     (void)ptButton;
 
     /* 预留：后续如需可调参数在此实现加操作 */
-    SEGGER_RTT_printf(0, "KEY3 value +\r\n");
+    printf("KEY3 value +\r\n");
 }

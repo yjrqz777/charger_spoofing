@@ -53,10 +53,10 @@ DCDC1 GND(2)、U1 GND(2)、U2 GND(29)、D2/R8（G-S 回路）、Q3 源极、R25 
 LED1→R37 100Ω 下端、C20/C21 等、CN1 负端、H1/H2 4 脚。
 
 ### USB-DP
-USB1 Dp1 A6 + Dp2 B6（短接）→ D3（ESD 到 GND）→ 命名网络 `USB-DP`（图上仅此两处，**未接 MCU**）
+USB1 Dp1 A6 + Dp2 B6（短接）→ D3（ESD 到 GND）→ `USB-DP` → U2 PC17/UDP (27)。
 
 ### USB-DM
-USB1 Dn1 A7 + Dn2 B7（短接）→ D4（ESD 到 GND）→ `USB-DM`（**未接 MCU**）
+USB1 Dn1 A7 + Dn2 B7（短接）→ D4（ESD 到 GND）→ `USB-DM` → U2 PC16/UDM (26)。
 
 ### USB-CC1
 | 端点 | 说明 |
@@ -117,7 +117,7 @@ U1 INA180 OUT (1) → R16 100Ω → 网络 → U2 PA4 (9)；C11 10nF 对地。
 | 网络 | SW | 上拉 | 消抖 | U2 |
 |---|---|---|---|---|
 | KEY-1 | SW1 TS24CA | R19 10kΩ→3V3 | C16 10nF | PB3 (14) |
-| KEY-2 | SW2 TS24CA | R20 10kΩ→3V3 | C17 10nF | PB7 (18) |
+| KEY-2 | SW2 TS24CA | R20 10kΩ→3V3 | C17 10nF | PB4 (15) |
 | KEY-3 | SW3 TS24CA | R21 10kΩ→3V3 | C18 10nF | PB6 (17) |
 
 ### LED

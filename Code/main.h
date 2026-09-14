@@ -31,7 +31,6 @@ extern "C" {
 
 #include "ch32x035.h"          /* 器件寄存器定义 + ch32x035_conf.h 外设声明 */
 #include "debug.h"             /* Delay_Init/Delay_Ms/Delay_Us/USART_Printf_Init */
-#include "SEGGER_RTT.h"        /* 调试打印兼容层（本项目内实现，非 SEGGER 官方库） */
 #include "user_config.h"
 
 /* ========================================================================== *
@@ -86,7 +85,7 @@ typedef enum
 #define KEY1_PIN            GPIO_Pin_3     /* KEY-1 -> MCU PB3  */
 
 #define KEY2_PORT           GPIOB
-#define KEY2_PIN            GPIO_Pin_7     /* KEY-2 -> MCU PB7  */
+#define KEY2_PIN            GPIO_Pin_4     /* KEY-2 -> MCU PB4  */
 
 #define KEY3_PORT           GPIOB
 #define KEY3_PIN            GPIO_Pin_6     /* KEY-3 -> MCU PB6  */
@@ -129,9 +128,9 @@ typedef enum
 /* ---- 4.7 日志串口 USART1 ---- *
  * NETLIST: LOG-TX = PB10 -> R34 100R -> H2.2；LOG-RX = PB11 -> R35 100R -> H2.3
  * 依据：数据手册 QFN28 引脚表 —— PB10 = TX1，PB11 = RX1，即 USART1 的
- *       默认 TX/RX 引脚（PA9/PA10 在 QFN28 封装上未引出）。
+ *       默认 TX/RX 引脚。
  * WCH 库 debug.c 的 USART_Printf_Init() 已按此配置 PB10 为 USART1_TX，
- * 因此 printf / SEGGER_RTT_printf 的日志直接输出到 H2 排针。 */
+ * 因此 printf 日志直接输出到 H2 排针。 */
 #define LOG_TX_PORT         GPIOB
 #define LOG_TX_PIN          GPIO_Pin_10
 #define LOG_RX_PORT         GPIOB

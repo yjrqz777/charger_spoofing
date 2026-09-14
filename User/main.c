@@ -57,20 +57,28 @@ static void SystemInit_User(void)
     SystemCoreClockUpdate();
     Delay_Init();
 
-    /* 2) 调试串口（USART1，默认 PA9/PA10） */
+    /* 2) 调试串口（USART1，TX=PB10，对应 LOG-TX） */
     USART_Printf_Init(115200);
-    SEGGER_RTT_printf(0, "\r\n=== pd-spoofing boot ===\r\n");
-    SEGGER_RTT_printf(0, "SYSCLK:%d Hz  ChipID:%08x\r\n",
-                      (int)SystemCoreClock, (unsigned int)DBGMCU_GetCHIPID());
+    printf("\r\n[BOOT] pd-spoofing start\r\n");
+    printf("[BOOT] SYSCLK=%lu Hz ChipID=%08lx\r\n",
+           (unsigned long)SystemCoreClock, (unsigned long)DBGMCU_GetCHIPID());
 
     /* 3) 板级 GPIO：输出使能默认关断，避免上电即带载 */
     BspBoardInit();
+    printf("[GPIO] LCD RES=PA1 DC=PA2 CS=PA3 SCK=PA5 SDA=PA7\r\n");
+    printf("[GPIO] ADC VOUT=PA0 IBUS=PA4 VBUS=PC0\r\n");
+    printf("[GPIO] KEY1=PB3 KEY2=PB4 KEY3=PB6 raw=%u%u%u\r\n",
+           (unsigned int)GPIO_ReadInputDataBit(KEY1_PORT, KEY1_PIN),
+           (unsigned int)GPIO_ReadInputDataBit(KEY2_PORT, KEY2_PIN),
+           (unsigned int)GPIO_ReadInputDataBit(KEY3_PORT, KEY3_PIN));
 
     /* 4) 1ms 时间片节拍（TIM3） */
     BspTickInit();
+    printf("[TICK] TIM3 1ms started\r\n");
 
     /* 5) LCD 的 SPI1 与 DMA */
     BspSpiInit();
+    printf("[BOOT] scheduler start\r\n");
 }
 
 /*********************************************************************
