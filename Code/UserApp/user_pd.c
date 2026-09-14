@@ -5,6 +5,7 @@
 
 #include "user_pd.h"
 #include "bsp_usb_pd.h"
+#include "bsp_lcd.h"      /* BspLcdGetDroppedOps()：[RUN] 诊断用 */
 
 /**
  * @brief Requests the fixed PDO immediately below the current selection.
@@ -114,13 +115,14 @@ uint16_t UsrPdTask(void)
         {
             const tBspUsbPdStatusDef *ptPdStatus = BspUsbPdGetStatus();
 
-            printf("[RUN] PD=%u/%u %umV %umA loops=%u/s cc=%u\r\n",
+            printf("[RUN] PD=%u/%u %umV %umA loops=%u/s cc=%u lcd_drop=%u\r\n",
                    (unsigned int)ptPdStatus->u8RequestedPdo,
                    (unsigned int)ptPdStatus->u8PdoCount,
                    (unsigned int)ptPdStatus->u16VoltageMv,
                    (unsigned int)ptPdStatus->u16CurrentMa,
                    (unsigned int)u16LoopsLastSecond,
-                   (unsigned int)ptPdStatus->u8CcLine);
+                   (unsigned int)ptPdStatus->u8CcLine,
+                   (unsigned int)BspLcdGetDroppedOps());
 
             u16LoopsLastSecond = u16LoopCount;
             u16LoopCount = 0u;

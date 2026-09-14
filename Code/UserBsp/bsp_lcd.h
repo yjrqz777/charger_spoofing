@@ -43,6 +43,13 @@ void BspLcdClearScreen(uint16_t u16Color);
  */
 void BspLcdCancelRefresh(void);
 
+/**
+ * @brief  查询因请求帧槽位不足被丢弃的操作数。
+ * @return 累计丢弃数量。不为 0 表示界面上有内容没能显示出来，
+ *         需要调大 BspLcdService 所在文件里的 BSP_LCD_FIELD_MAX。
+ */
+uint16_t BspLcdGetDroppedOps(void);
+
 /* ===================== 阻塞式直接显示接口 ===================== */
 
 void BspLcdShowString(uint16_t u16X, uint16_t u16Y, const char *pcText,

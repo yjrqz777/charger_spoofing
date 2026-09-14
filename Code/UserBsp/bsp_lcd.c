@@ -21,8 +21,15 @@
 #include "bsp_tick.h"
 #include "st7789v/st7789v.h"
 
-/** @brief 一帧内最多允许的待显示操作数 */
-#define BSP_LCD_FIELD_MAX        (12u)
+/**
+ * @brief 一帧内最多允许的待显示操作数。
+ * @note  字符串改为异步分块后，每个字符串都会占用一个槽位（长字符串按
+ *        LCD_DMA_TEXT_CHUNK_CHARS 还会占用多个），因此容量必须按最坏情况留：
+ *          1（整屏填充）+ 12（行标签/开机页，含 pd-spoofing 的两块）
+ *          + 4（浮点）+ 3（顶栏 PD/EN 字符串）= 20
+ *        之前是 12，改异步后不够用，超出的操作会被静默丢弃。
+ */
+#define BSP_LCD_FIELD_MAX        (20u)
 #define BSP_LCD_FIELD_TIMEOUT_MS (500u)
 
 /** @brief 字段操作类型 */
@@ -69,6 +76,18 @@ static uint8_t  s_u8RefreshInFlight  = 0u;     /**< 正在输出活动帧 */
 static uint8_t  s_u8RequestedStateId = 0xFFu;  /**< 请求帧对应的系统状态 */
 static uint8_t  s_u8ActiveStateId    = 0xFFu;  /**< 活动帧对应的系统状态 */
 static uint32_t s_u32OpStartMs       = 0u;     /**< 当前操作的启动时刻 */
+
+/** @brief 因请求帧槽位不足而被丢弃的操作数（>0 说明 BSP_LCD_FIELD_MAX 偏小） */
+static uint16_t s_u16DroppedOps      = 0u;
+
+/**
+ * @brief  查询因队列满而丢弃的操作数
+ * @return 累计丢弃数量；不为 0 就说明有内容没显示出来
+ */
+uint16_t BspLcdGetDroppedOps(void)
+{
+    return s_u16DroppedOps;
+}
 
 /* ========================================================================== *
  *  内部函数
@@ -221,6 +240,7 @@ static tBspLcdOpDef *BspLcdAllocOp(void)
 
     if (s_u8RequestedCount >= BSP_LCD_FIELD_MAX)
     {
+        s_u16DroppedOps++;
         return 0;
     }
 
