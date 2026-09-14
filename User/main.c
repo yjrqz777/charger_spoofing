@@ -36,10 +36,12 @@
 #include "user_button.h"
 #include "user_system.h"
 #include "user_time.h"
+#include "user_ws2812.h"
 
 #include "bsp_tick.h"
 #include "bsp_board.h"
 #include "bsp_spi.h"
+#include "bsp_ws2812.h"
 
 /**
  * @brief  系统初始化
@@ -49,6 +51,7 @@
  *           3) 板级 GPIO（含 LCD 控制线与按键、输出使能的安全默认电平）
  *           4) 1ms 时间片节拍（TIM3）—— 必须在任何依赖 BspTickGetMs 的驱动之前
  *           5) SPI1 Mode 2 + DMA（LCD 输出通道）
+ *           6) TIM1_CH1 + DMA（4 颗 WS2812）
  */
 static void SystemInit_User(void)
 {
@@ -78,6 +81,9 @@ static void SystemInit_User(void)
 
     /* 5) LCD 的 SPI1 Mode 2 与 TX DMA 接口 */
     BspSpiInit();
+
+    /* 6) WS2812 PWM 输出：PB9 = TIM1_CH1，DMA1 Channel 5 */
+    BspWs2812Init();
     printf("[BOOT] scheduler start\r\n");
 }
 
@@ -105,5 +111,8 @@ int main(void)
 
         /* 时间任务：上电时间与开机时间累计 */
         PT_TASK_REG(3, UsrTimeTask);
+
+        /* WS2812 任务：4 颗灯同步颜色渐变 */
+        PT_TASK_REG(4, UsrWs2812Task);
     }
 }

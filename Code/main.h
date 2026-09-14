@@ -120,12 +120,16 @@ typedef enum
 #define LED_RUN_PORT        GPIOB
 #define LED_RUN_PIN         GPIO_Pin_8
 
-/* ---- 4.6 蜂鸣器 BEEP ---- *
+/* ---- 4.6 WS2812（TIM1_CH1 PWM + DMA1 Channel 5） ---- */
+#define WS2812_PORT          GPIOB
+#define WS2812_PIN           GPIO_Pin_9
+
+/* ---- 4.7 蜂鸣器 BEEP ---- *
  * NETLIST: R24 1k -> Q4 S8050 基极（高电平鸣响） */
 #define BEEP_PORT           GPIOB
 #define BEEP_PIN            GPIO_Pin_5     /* 预留：原理图未标注 MCU 侧网络，需硬件确认 */
 
-/* ---- 4.7 日志串口 USART1 ---- *
+/* ---- 4.8 日志串口 USART1 ---- *
  * NETLIST: LOG-TX = PB10 -> R34 100R -> H2.2；LOG-RX = PB11 -> R35 100R -> H2.3
  * 依据：数据手册 QFN28 引脚表 —— PB10 = TX1，PB11 = RX1，即 USART1 的
  *       默认 TX/RX 引脚。
