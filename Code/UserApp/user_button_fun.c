@@ -10,8 +10,13 @@
 
 #include "user_button_fun.h"
 #include "user_system.h"
+#include "user_pd.h"
 #include "bsp_board.h"
 
+/**
+ * @brief Toggles the switched VOUT path and its status indicator.
+ * @param[in] ptButton Pointer to the button that triggered the action.
+ */
 void UsrButtonOutputToggle(Button *ptButton)
 {
     (void)ptButton;
@@ -32,18 +37,22 @@ void UsrButtonOutputToggle(Button *ptButton)
     }
 }
 
+/**
+ * @brief Requests the next lower fixed USB-PD voltage profile.
+ * @param[in] ptButton Pointer to the button that triggered the action.
+ */
 void UsrButtonValueDec(Button *ptButton)
 {
     (void)ptButton;
-
-    /* 预留：后续如需可调参数（如采样周期、屏幕亮度等）在此实现减操作 */
-    printf("KEY2 value -\r\n");
+    UsrPdSelectPreviousPdo();
 }
 
+/**
+ * @brief Requests the next higher fixed USB-PD voltage profile.
+ * @param[in] ptButton Pointer to the button that triggered the action.
+ */
 void UsrButtonValueInc(Button *ptButton)
 {
     (void)ptButton;
-
-    /* 预留：后续如需可调参数在此实现加操作 */
-    printf("KEY3 value +\r\n");
+    UsrPdSelectNextPdo();
 }

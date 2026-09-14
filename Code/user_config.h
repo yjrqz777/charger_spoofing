@@ -14,4 +14,10 @@
 /** @brief Static LCD test level: 0 drives low and 1 drives high. */
 #define LCD_IO_STATIC_TEST_LEVEL (0u)
 
+/** @brief Requested fixed PDO index. PDO 1 is the safe default 5 V profile. */
+#define USER_PD_REQUEST_PDO_INDEX (1u)
+
+/** @brief Enables USB Power Delivery sink negotiation. */
+#define USER_PD_ENABLE (1u)
+
 #endif /* __USER_CONFIG_H__ */

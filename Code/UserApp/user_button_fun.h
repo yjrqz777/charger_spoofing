@@ -21,19 +21,19 @@ extern "C" {
 #define USER_BUTTON_VALUE_STEP  (1)
 
 /**
- * @brief  KEY1 长按：切换输出开关 VOUT-EN
+ * @brief  KEY3 单击：切换输出开关 VOUT-EN
  * @param[in] ptButton  触发事件的按键结构体指针
  * @note   打开输出前会同步点亮指示灯，关闭输出则熄灭指示灯。
  */
 void UsrButtonOutputToggle(Button *ptButton);
 
 /**
- * @brief  KEY2 单击：数值减（预留）
+ * @brief  KEY1 单击：降低一个 PD 固定电压档。
  */
 void UsrButtonValueDec(Button *ptButton);
 
 /**
- * @brief  KEY3 单击：数值加（预留）
+ * @brief  KEY2 单击：提高一个 PD 固定电压档。
  */
 void UsrButtonValueInc(Button *ptButton);
 

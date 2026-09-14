@@ -5,11 +5,10 @@
  * @note    基于 multi-button 库的 3 按键管理（本板只有 KEY1/KEY2/KEY3）。
  *          支持单击、双击、长按、重复触发等事件。
  *
- *          事件绑定（需求确认）：
- *            - KEY1 单击  ：无（页面只有一页，预留）
- *            - KEY1 长按  ：切换输出开关 VOUT-EN
- *            - KEY2 单击  ：数值调整减（预留）
- *            - KEY3 单击  ：数值调整加（预留）
+ *          事件绑定：
+ *            - KEY1 单击：降低一个 PD 固定电压档。
+ *            - KEY2 单击：提高一个 PD 固定电压档。
+ *            - KEY3 单击：切换 VOUT-EN 输出。
  *******************************************************************************
  */
 
@@ -82,12 +81,6 @@ static void UsrButtonRecordEvent(Button *ptButton)
            button_get_repeat_count(ptButton));
 }
 
-static void UsrButtonToggleCallback(Button *ptButton)
-{
-    UsrButtonRecordEvent(ptButton);
-    UsrButtonOutputToggle(ptButton);
-}
-
 static void UsrButtonDecreaseCallback(Button *ptButton)
 {
     UsrButtonRecordEvent(ptButton);
@@ -98,6 +91,12 @@ static void UsrButtonIncreaseCallback(Button *ptButton)
 {
     UsrButtonRecordEvent(ptButton);
     UsrButtonValueInc(ptButton);
+}
+
+static void UsrButtonOutputCallback(Button *ptButton)
+{
+    UsrButtonRecordEvent(ptButton);
+    UsrButtonOutputToggle(ptButton);
 }
 
 /**
@@ -114,13 +113,13 @@ void UsrButtonInit(void)
     button_init(&tButtonTwo, UsrButtonReadGpio, USER_BUTTON_ACTIVE_LEVEL, 2u);
     button_init(&tButtonThree, UsrButtonReadGpio, USER_BUTTON_ACTIVE_LEVEL, 3u);
 
-    /* KEY1：长按切换输出开关 VOUT-EN */
-    button_attach(&tButtonOne, BTN_LONG_PRESS_START, UsrButtonToggleCallback);
-    /* KEY2 / KEY3：单击做数值减 / 加（当前为预留实现） */
-    button_attach(&tButtonTwo, BTN_SINGLE_CLICK,    UsrButtonDecreaseCallback);
-    button_attach(&tButtonThree, BTN_SINGLE_CLICK,  UsrButtonIncreaseCallback);
+    /* KEY1 / KEY2：单击降低 / 提高 PD 固定电压档。 */
+    button_attach(&tButtonOne, BTN_SINGLE_CLICK, UsrButtonDecreaseCallback);
+    button_attach(&tButtonTwo, BTN_SINGLE_CLICK, UsrButtonIncreaseCallback);
+    /* KEY3：单击切换 VOUT-EN 输出。 */
+    button_attach(&tButtonThree, BTN_SINGLE_CLICK, UsrButtonOutputCallback);
     /* 全部按键记录事件到日志，便于调试 */
-    button_attach(&tButtonOne, BTN_SINGLE_CLICK,     UsrButtonRecordEvent);
+    button_attach(&tButtonOne, BTN_LONG_PRESS_START, UsrButtonRecordEvent);
     button_attach(&tButtonTwo, BTN_LONG_PRESS_START, UsrButtonRecordEvent);
     button_attach(&tButtonThree, BTN_LONG_PRESS_START, UsrButtonRecordEvent);
 

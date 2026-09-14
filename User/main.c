@@ -37,6 +37,7 @@
 #include "user_system.h"
 #include "user_time.h"
 #include "user_ws2812.h"
+#include "user_pd.h"
 
 #include "bsp_tick.h"
 #include "bsp_board.h"
@@ -114,5 +115,8 @@ int main(void)
 
         /* WS2812 任务：4 颗灯同步颜色渐变 */
         PT_TASK_REG(4, UsrWs2812Task);
+
+        /* USB-PD Sink task: CC detection and contract negotiation. */
+        PT_TASK_REG(5, UsrPdTask);
     }
 }

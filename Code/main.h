@@ -140,6 +140,11 @@ typedef enum
 #define LOG_RX_PORT         GPIOB
 #define LOG_RX_PIN          GPIO_Pin_11
 
+/* ---- 4.9 USB Power Delivery sink ---- */
+#define USB_PD_CC_PORT      GPIOC
+#define USB_PD_CC1_PIN      GPIO_Pin_14
+#define USB_PD_CC2_PIN      GPIO_Pin_15
+
 /* ========================================================================== *
  *  5. 硬件标度换算（用于把 ADC 码值换算成物理量）
  *  ---------------------------------------------------------------------------
