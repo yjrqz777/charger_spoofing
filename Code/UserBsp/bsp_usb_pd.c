@@ -20,6 +20,7 @@ static const uint8_t au8PdSinkCapability[4] = {0x64u, 0x90u, 0x01u, 0x36u};
 
 static volatile uint8_t u8PdMessageReceived = 0u;
 static volatile uint8_t u8PdHardResetReceived = 0u;
+static volatile uint32_t u32PdRxInterruptCount = 0u;
 static CC_STATUS ePdState = STA_IDLE;
 static uint8_t u8PdMessageId = 0u;
 static uint8_t u8PdDetectCount = 0u;
@@ -105,6 +106,15 @@ static void BspUsbPdSendPhy(uint8_t u8Wait, uint8_t *pu8Buffer,
         USBPD->STATUS |= IF_TX_END;
         USBPD->PORT_CC1 &= ~CC_LVE;
         USBPD->PORT_CC2 &= ~CC_LVE;
+
+        /* Match the WCH USBPD_SNK flow: switch to RX immediately so the
+         * caller can poll the GoodCRC response for the packet just sent. */
+        USBPD->CONFIG |= PD_ALL_CLR;
+        USBPD->CONFIG &= ~PD_ALL_CLR;
+        USBPD->CONTROL &= ~PD_TX_EN;
+        USBPD->DMA = (uint32_t)au8PdRxBuffer;
+        USBPD->BMC_CLK_CNT = UPD_TMR_RX_48M;
+        USBPD->CONTROL |= BMC_START;
     }
 }
 
@@ -259,6 +269,7 @@ static void BspUsbPdStartPdoRequest(uint8_t u8RequestedIndex)
     else
     {
         ePdState = STA_TX_SOFTRST;
+        printf("[PD] request GoodCRC timeout\r\n");
     }
     u16PdCommunicationTimerMs = 0u;
 }
@@ -331,6 +342,10 @@ static void BspUsbPdProcessDetection(void)
     {
         USBPD->CONFIG |= CC_SEL;
     }
+
+    /* CC detection changes comparator and channel-selection state. Restart the
+     * BMC receiver so it listens on the selected wire from a clean state. */
+    BspUsbPdEnterReceiveMode();
     ePdState = STA_SRC_CONNECT;
     u16PdCommunicationTimerMs = 0u;
     printf("[PD] source connected on CC%u\r\n", (unsigned int)CcLine);
@@ -459,6 +474,7 @@ void BspUsbPdInit(void)
     u8PdDetectCount = 0u;
     u16PdDetectTimerMs = 0u;
     u8PdHardResetReceived = 0u;
+    u32PdRxInterruptCount = 0u;
     BspUsbPdPhyReset();
     BspUsbPdEnterReceiveMode();
     printf("[PD] sink initialized: CC1=PC14 CC2=PC15 request=PDO%u\r\n",
@@ -495,6 +511,13 @@ void BspUsbPdProcess(uint16_t u16ElapsedMs)
             (uint16_t)(u16PdCommunicationTimerMs + u16ElapsedMs);
         if (u16PdCommunicationTimerMs >= BSP_USB_PD_SOURCE_CAP_TIMEOUT_MS)
         {
+            printf("[PD] source capabilities timeout: cc=%u rx=%lu cfg=%08lx ctl=%08lx stat=%08lx cnt=%lu\r\n",
+                   (unsigned int)tBspUsbPdStatus.u8CcLine,
+                   (unsigned long)u32PdRxInterruptCount,
+                   (unsigned long)USBPD->CONFIG,
+                   (unsigned long)USBPD->CONTROL,
+                   (unsigned long)USBPD->STATUS,
+                   (unsigned long)USBPD->BMC_BYTE_CNT);
             u16PdCommunicationTimerMs = 0u;
             BspUsbPdPhyReset();
             ePdState = STA_SRC_CONNECT;
@@ -588,6 +611,7 @@ void USBPD_IRQHandler(void)
 {
     if ((USBPD->STATUS & IF_RX_ACT) != 0u)
     {
+        u32PdRxInterruptCount++;
         USBPD->STATUS |= IF_RX_ACT;
         if (((USBPD->STATUS & MASK_PD_STAT) == PD_RX_SOP0) &&
             (USBPD->BMC_BYTE_CNT >= 6u) &&

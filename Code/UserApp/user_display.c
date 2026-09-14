@@ -25,6 +25,7 @@
 #include "bsp_adc.h"
 #include "bsp_board.h"
 #include "bsp_button.h"
+#include "bsp_usb_pd.h"
 #include "bsp_spi.h"
 #include "st7789v/st7789v.h"
 
@@ -97,6 +98,11 @@ static void UsrDisplayDrawStatic(void)
  */
 static void UsrDisplayRefreshFrame(const tBspAdcDataDef *ptData)
 {
+    const tBspUsbPdStatusDef *ptPdStatus;
+    char acPdProfileText[10];
+    char acPdVoltageText[10];
+
+    ptPdStatus = BspUsbPdGetStatus();
     BspLcdBeginRefresh((uint8_t)tSysData.eState);
 
     /* 第 1 行：输入母线电压（3 位整数 + 2 位小数，共 6 字符） */
@@ -110,6 +116,37 @@ static void UsrDisplayRefreshFrame(const tBspAdcDataDef *ptData)
 
     /* 第 4 行：输出功率（2 位小数，6 字符宽；y=106 + 24 = 130 < 135） */
     BspLcdAddFloat(DISPLAY_VALUE_X, DISPLAY_ROW4_Y, ptData->f32Power, 6u, 2u, BLACK);
+
+    /* Top bar: selected fixed PDO and total number advertised by the source. */
+    if (ptPdStatus->u8Connected == 0u)
+    {
+        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "PD:OFF ");
+        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:--V ");
+        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText, RED, WHITE, 16u);
+        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
+                        RED, WHITE, 16u);
+    }
+    else if (ptPdStatus->u8ContractValid == 0u)
+    {
+        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "PD:WAIT");
+        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:... ");
+        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText,
+                        BLUE, WHITE, 16u);
+        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
+                        BLUE, WHITE, 16u);
+    }
+    else
+    {
+        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "P%u/%u   ",
+                       (unsigned int)ptPdStatus->u8RequestedPdo,
+                       (unsigned int)ptPdStatus->u8PdoCount);
+        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:%uV  ",
+                       (unsigned int)(ptPdStatus->u16VoltageMv / 1000u));
+        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText,
+                        GREEN, WHITE, 16u);
+        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
+                        GREEN, WHITE, 16u);
+    }
 
     /* 顶栏右侧：输出开关状态 */
     if (BspBoardGetVoutEnable() != 0u)
@@ -159,6 +196,7 @@ static void UsrDisplayPowerOnState(void)
 static void UsrDisplayRunningState(void)
 {
     const tBspAdcDataDef *ptData;
+    const tBspUsbPdStatusDef *ptPdStatus;
 
     /* 进入 RUNNING 的第一次：清屏 + 画静态内容 */
     if (s_u8ScreenCleared == 0u)
@@ -197,11 +235,17 @@ static void UsrDisplayRunningState(void)
     {
         s_u16DiagnosticAcc = 0u;
         ptData = BspAdcGetData();
-        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x dma_idle=%u spi_error=%u\r\n",
+        ptPdStatus = BspUsbPdGetStatus();
+
+        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x PD=%u/%u %umV EN=%u dma_idle=%u spi_error=%u\r\n",
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VBUS],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VOUT],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_IBUS],
                (unsigned int)BspButtonGetRawMask(),
+               (unsigned int)ptPdStatus->u8RequestedPdo,
+               (unsigned int)ptPdStatus->u8PdoCount,
+               (unsigned int)ptPdStatus->u16VoltageMv,
+               (unsigned int)BspBoardGetVoutEnable(),
                (unsigned int)BspSpiIsIdle(),
                (unsigned int)BspSpiHasError());
     }
