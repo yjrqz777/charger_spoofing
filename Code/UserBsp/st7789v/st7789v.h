@@ -6,34 +6,19 @@
  *          提供点、线、矩形、圆、汉字、字符、字符串、数字、图片等绘图接口
  *
  *          硬件接口（已移植到 CH32X035 + WCH 标准外设库）：
- *            - SPI1 主机：SCK = PA4，MOSI(SDA) = PA7
- *            - GPIO：CS = PA2，DC = PA1，RES = PA0
+ *            - SPI1 主机：SCK = PA5，MOSI(SDA) = PA7
+ *            - GPIO：CS = PA3，DC = PA2，RES = PA1
  *            - SPI1_TX 的 DMA 走 DMA1 通道 3（见 bsp_spi.c）
  *          引脚定义来自 Code/main.h，与原理图 NETLIST 一致。
  *******************************************************************************
  */
 
-#ifndef __ST7789V_H
-#define __ST7789V_H
+#ifndef __ST7789V_H__
+#define __ST7789V_H__
 #include "main.h"
 #include "bsp_spi.h"
 
 #include <stdio.h>
-
-/* 显示驱动错误码类型别名（沿用旧签名命名，实为 WCH 库返回类型） */
-typedef uint8_t HAL_StatusTypeDef;
-#ifndef HAL_OK
-#define HAL_OK      0u   /**< 操作成功 */
-#endif
-#ifndef HAL_ERROR
-#define HAL_ERROR   1u   /**< 操作失败 */
-#endif
-#ifndef HAL_BUSY
-#define HAL_BUSY    2u   /**< 外设忙 */
-#endif
-#ifndef HAL_TIMEOUT
-#define HAL_TIMEOUT 3u   /**< 超时 */
-#endif
 
 /* LCD 硬件控制引脚
  * 注意：本板 N114-2413THBIG01-H13 的背光 LEDK 硬件直接接地（常亮），无背光控制脚 */
@@ -95,7 +80,7 @@ extern void LCD_color_point(uint16_t x1, uint16_t y1, uint16_t color);
  * @retval 0  空闲，可发起下一个字段
  * @note   由 bsp_lcd.c 的字段刷新状态机使用。
  */
-uint8_t LCD_IsDmaBusy(void);
+uint8_t LCD_IsTransferBusy(void);
 
 /* 绘图接口 */
 void LCD_Fill(uint16_t xsta, uint16_t ysta, uint16_t xend, uint16_t yend, uint16_t color);
@@ -118,15 +103,15 @@ void LCD_ShowString(uint16_t x, uint16_t y, const uint8_t *p, uint16_t fc, uint1
 /* 数字显示 */
 uint32_t mypow(uint8_t m, uint8_t n);
 void LCD_ShowIntNum(uint16_t x, uint16_t y, uint16_t num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
-HAL_StatusTypeDef LCD_ShowIntNumDma(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
-                                    uint16_t fc, uint16_t bc, uint8_t sizey);
+eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
+                               uint16_t fc, uint16_t bc, uint8_t sizey);
 void LCD_ShowFloatNum1(uint16_t x, uint16_t y, float num, uint8_t len, uint16_t fc, uint16_t bc, uint8_t sizey);
-HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
-                                       uint8_t u8Length, uint8_t u8Decimals,
-                                       uint16_t fc, uint16_t bc, uint8_t sizey);
+eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
+                                 uint8_t u8Length, uint8_t u8Decimals,
+                                 uint16_t fc, uint16_t bc, uint8_t sizey);
 
 /* 图片 / 自定义尺寸汉字 */
 void LCD_ShowPicture(uint16_t x, uint16_t y, uint16_t length, uint16_t width, const uint8_t pic[]);
 void LCD_ShowChineseTEST(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizeW, uint8_t sizeH, uint8_t mode);
 
-#endif /* __ST7789V_H */
+#endif /* __ST7789V_H__ */

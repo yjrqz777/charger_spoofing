@@ -3,9 +3,9 @@
  * @brief   ADC 采样底层驱动头文件（母线电压 / 输出电压 / 输出电流）
  *******************************************************************************
  * @note    硬件依据（原理图 doc/schematic/NETLIST.md）：
- *            - IBUS-ADC    ：PA3 -> ADC1_IN3   （经 R16 100R + C11 10nF）
+ *            - IBUS-ADC    ：PA4 -> ADC1_IN4   （经 R16 100R + C11 10nF）
  *            - USB-VBUS-ADC：PC0 -> ADC1_IN10  （经 R12 100R + C10 100nF）
- *            - VOUT-ADC    ：PC3 -> ADC1_IN13  （经 R11 100R + C9 100nF）
+ *            - VOUT-ADC    ：PA0 -> ADC1_IN0   （经 R11 100R + C9 100nF）
  *          通道号依据数据手册 2.3 节复用表：引脚名后缀 Axx 即 ADC_INxx。
  *
  *          换算系数集中在 Code/main.h，依据原理图分压/增益参数：

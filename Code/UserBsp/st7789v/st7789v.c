@@ -1,12 +1,7 @@
-/***************************************************************************************************
- * Author: yjrqz777 3210551161@qq.com
- * Date: 2025-05-08 20:07:45
- * LastEditTime: 2026-08-06 09:22:50
- * LastEditors: duanzhixuan duanzhixuan@topband.com.cn
- * Description: 
- * FilePath: \MyFoc\Code\UserBsp\st7789v\st7789v.c
- * @YJRQZ777
-***************************************************************************************************/
+/**
+ * @file st7789v.c
+ * @brief Implements the ST7789V display driver for the CH32X035 SPI interface.
+ */
 
 #include "st7789v.h"
 #include "font.h"
@@ -63,7 +58,7 @@ static void LCD_DmaRenderString(const uint8_t *pu8Characters, uint8_t u8Length,
  * @param[in] TxData  待发送的数据
  * @param[in] size    发送字节数
  * @retval 0          发送成功
- * @note   已由 STM32 HAL 移植为 WCH 标准外设库实现，调用 bsp_spi.c。
+ * @note   数据通过项目的 WCH SPI1 板级接口发送。
  */
 uint8_t SPI_WriteByte(uint8_t TxData, uint16_t size)
 {
@@ -180,90 +175,6 @@ void ST7789V_SetDir(uint8_t Dir_Mode)
     else
         LCD_Write_Data(0xA0);
 }
-/***************************************************************************************************
- * 功能描述: 以一种颜色清空LCD屏
- * 输入参数: color —— 清屏颜色(16bit)
- * 输出参数: 
- * 返 回 值: none
- * 其它说明: 
- * param {uint16_t} color
-// ***************************************************************************************************/
-// void LCD_Clear(uint16_t color)
-// {
-//     LCD_Address_Set(0, 0, 240, 135);
-//     for (uint32_t i = 0; i < LCD_BUFF_SIZE; i++)
-//     {
-				
-//         uint8_tbuf[i * 2] = (color >> 8) & 0xFF;
-//         uint8_tbuf[i * 2 + 1] = color & 0xFF;
-			
-//     }
-//     // HAL_SPI_Transmit_DMA(&hspi3, buf,LCD_BUFF_SIZE*2);
-// }
-
-// void LCD_ConvertAndSendDMA()
-// {
-//     // 设置数据命令模式为 DATA
-//     LCD_DC(DATA);
-//     // 使用 DMA 发送 8 位数据缓冲区
-//     HAL_SPI_Transmit_DMA(&hspi3, uint8_tbuf, LCD_W * LCD_H * 2);
-//     // 等待 DMA 传输完成
-//     // while (HAL_SPI_GetState(&hspi3) != HAL_SPI_STATE_READY)
-//     // {
-//     //     /* code */
-//     // }
-    
-// }
-
-
-
-
-
-/***************************************************************************************************
- * 功能描述: 
- * 输入参数: 
- * 输出参数: 
- * 返 回 值: 
- * 其它说明: 
- * param {uint16_t} x1
- * param {uint16_t} y1
- * param {uint16_t} x2
- * param {uint16_t} y2
- * param {uint16_t} color
-***************************************************************************************************/
-// void LCD_color_fill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)
-// {
-//     uint16_t width = (x2 - x1) + 1;
-//     uint16_t height = (y2 - y1) + 1;
-//     uint16_t buf_size2 = (width * height);
-
-//     LCD_Address_Set(x1, y1, x2, y2);
-    
-//     for (uint32_t i = 0; i < buf_size2; i++)
-//     {
-				
-//         buf[i * 2] = (color >> 8) & 0xFF;
-//         buf[i * 2 + 1] = color & 0xFF;
-			
-//     }
-//     LCD_DC(DATA);
-//     HAL_SPI_Transmit(&hspi3, buf,buf_size2*2,1000);
-// }
-
-//void LCD_color_fill(uint16_t x1, uint16_t y1, uint16_t x2, uint16_t y2, uint16_t color)
-//{
-//    uint16_t width = x2 - x1;
-//    uint16_t height = y2 - y1;
-//    uint32_t buf_size = width * height * 2; // 16-bit color, 2 bytes per pixel
-//    uint8_t *buf = (uint8_t *)malloc(buf_size);
-
-//    LCD_DC(DATA);
-//    LCD_Address_Set(x1, y1, x2, y2);
-//    HAL_SPI_Transmit(&hspi3, buf, buf_size * 2, 1000);
-
-//    free(buf);
-//}
-
 /**
  * @brief  在指定坐标写入一个像素点颜色
  * @param[in] x1     x 坐标
@@ -397,25 +308,7 @@ void st7789v_init(void)
     LCD_Write_Cmd(0x21);
     LCD_Write_Cmd(0x29);
 
-    // LCD_Fill(0, 0, LCD_W, LCD_H, BLACK);
-    // HAL_Delay(1000);
-    // LCD_Fill(0, 0, LCD_W, LCD_H, WHITE);
-    // HAL_Delay(1000);
-    // // LCD_ShowPicture(0, 0, 240, 135, (uint8_t *)gImage_fu);
-
-    // Draw_Circle(120, 67, 50, RED);
-    // LCD_ShowChineseTEST(0, 0, "FOC", WHITE, BLACK, 80,135, 0);
-	// HAL_Delay(10);
-	// LCD_ShowString(0, 0, "YJRQZ777", WHITE, BLACK, 16, 1);
-
-
-	// HAL_Delay(1000);
-
     LCD_Fill(0, 0, 240, 135,WHITE);
-    // HAL_Delay(100);
-    // LCD_Clear(YELLOW);
-    // HAL_Delay(100);
-
 }
 
 
@@ -1020,22 +913,26 @@ void LCD_ShowPicture(uint16_t x,uint16_t y,uint16_t length,uint16_t width,const 
 }
 
 
-HAL_StatusTypeDef LCD_ShowIntNumDma(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
-                                    uint16_t fc, uint16_t bc, uint8_t sizey)
+eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
+                               uint16_t fc, uint16_t bc, uint8_t sizey)
 {
     uint8_t au8Characters[LCD_DMA_MAX_DIGITS];
     uint8_t u8Digit;
     uint8_t u8ShowDigit = 0u;
     uint8_t u8Index;
     uint32_t u32BufferIndex = 0u;
-    HAL_StatusTypeDef eStatus;
+    eStatusDef eStatus;
 
     if ((sizey != LCD_DMA_FONT_SIZE_Y) || (len == 0u) || (len > LCD_DMA_MAX_DIGITS) ||
         ((uint32_t)x + (uint32_t)len * LCD_DMA_FONT_SIZE_X > LCD_W) ||
-        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H) || (u8LcdDmaBusy != 0u) ||
-        (BspSpiIsIdle() == 0u))
+        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H))
     {
-        return HAL_BUSY;
+        return E_ERROR;
+    }
+
+    if ((u8LcdDmaBusy != 0u) || (BspSpiIsIdle() == 0u))
+    {
+        return E_BUSY;
     }
 
     for (u8Index = 0u; u8Index < len; u8Index++)
@@ -1056,8 +953,8 @@ HAL_StatusTypeDef LCD_ShowIntNumDma(uint16_t x, uint16_t y, uint32_t num, uint8_
                     (uint16_t)(y + LCD_DMA_FONT_SIZE_Y - 1u));
     LCD_DC(DATA);
     u8LcdDmaBusy = 1u;
-    eStatus = (HAL_StatusTypeDef)BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
-    if (eStatus != HAL_OK)
+    eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
+    if (eStatus != E_OK)
     {
         u8LcdDmaBusy = 0u;
     }
@@ -1073,14 +970,15 @@ HAL_StatusTypeDef LCD_ShowIntNumDma(uint16_t x, uint16_t y, uint32_t num, uint8_
  * @param[in] fc           前景色
  * @param[in] bc           背景色
  * @param[in] sizey        字号（仅支持 24）
- * @retval HAL_OK          DMA 传输已启动
- * @retval HAL_BUSY        DMA 忙或参数非法
+ * @retval E_OK     DMA 传输已启动
+ * @retval E_ERROR  参数非法
+ * @retval E_BUSY   DMA 正在传输
  * @note   右对齐显示，前导零以空格替换；负号紧贴首位有效数字左侧。
  *         调用方需保证 u8Length 足以容纳符号位，否则符号可能被截断。
  */
-HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
-                                       uint8_t u8Length, uint8_t u8Decimals,
-                                       uint16_t fc, uint16_t bc, uint8_t sizey)
+eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
+                                 uint8_t u8Length, uint8_t u8Decimals,
+                                 uint16_t fc, uint16_t bc, uint8_t sizey)
 {
     uint8_t au8Characters[LCD_DMA_MAX_DIGITS];
     uint8_t au8Digits[LCD_DMA_MAX_DIGITS];
@@ -1095,15 +993,19 @@ HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
     uint32_t u32Scaled;
     uint32_t u32Scale = 1u;
     uint32_t u32BufferIndex = 0u;
-    HAL_StatusTypeDef eStatus;
+    eStatusDef eStatus;
 
     if ((sizey != LCD_DMA_FONT_SIZE_Y) || (u8Length == 0u) || (u8Length > LCD_DMA_MAX_DIGITS) ||
         (u8Decimals == 0u) || ((uint8_t)(u8Decimals + 1u) >= u8Length) ||
         ((uint32_t)x + (uint32_t)u8Length * LCD_DMA_FONT_SIZE_X > LCD_W) ||
-        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H) || (u8LcdDmaBusy != 0u) ||
-        (BspSpiIsIdle() == 0u))
+        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H))
     {
-        return HAL_BUSY;
+        return E_ERROR;
+    }
+
+    if ((u8LcdDmaBusy != 0u) || (BspSpiIsIdle() == 0u))
+    {
+        return E_BUSY;
     }
 
     if (fValue < 0.0f)
@@ -1174,8 +1076,8 @@ HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
                     (uint16_t)(y + LCD_DMA_FONT_SIZE_Y - 1u));
     LCD_DC(DATA);
     u8LcdDmaBusy = 1u;
-    eStatus = (HAL_StatusTypeDef)BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
-    if (eStatus != HAL_OK)
+    eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
+    if (eStatus != E_OK)
     {
         u8LcdDmaBusy = 0u;
     }
@@ -1186,12 +1088,11 @@ HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
  * @brief  查询 LCD 的 DMA 字段传输是否仍在进行
  * @retval 1  正在传输
  * @retval 0  空闲，可发起下一个字段
- * @note   替代原 STM32 版本的 HAL_SPI_TxCpltCallback / HAL_SPI_ErrorCallback。
- *         移植后由 bsp_spi.c 的 DMA1_Channel3 中断维护底层空闲标志，
+ * @note   由 bsp_spi.c 的 DMA1_Channel3 中断维护底层空闲标志，
  *         本函数再叠加 LCD 自身"当前字段"的 busy 标志，
  *         供 bsp_lcd.c 的字段状态机判断何时推进下一字段。
  */
-uint8_t LCD_IsDmaBusy(void)
+uint8_t LCD_IsTransferBusy(void)
 {
     if ((u8LcdDmaBusy != 0u) && (BspSpiIsIdle() != 0u))
     {

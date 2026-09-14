@@ -76,7 +76,7 @@ static uint8_t BspLcdWaitDmaIdle(uint32_t u32TimeoutMs)
 {
     uint32_t u32Start = BspTickGetMs();
 
-    while (LCD_IsDmaBusy() != 0u)
+    while (LCD_IsTransferBusy() != 0u)
     {
         if ((BspTickGetMs() - u32Start) > u32TimeoutMs)
         {
@@ -107,19 +107,19 @@ static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
             return 0u;
 
         case E_BSP_LCD_OP_UINT:
-            if (LCD_ShowIntNumDma(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
-                                  ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
-                                  ptOp->u8SizeY) != HAL_OK)
+            if (LCD_ShowIntNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
+                                    ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
+                                    ptOp->u8SizeY) != E_OK)
             {
                 return 1u;
             }
             return 0u;
 
         case E_BSP_LCD_OP_FLOAT:
-            if (LCD_ShowFloatNumDma(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
-                                    ptOp->u8Length, ptOp->u8Decimals,
-                                    ptOp->u16Fc, ptOp->u16Bc,
-                                    ptOp->u8SizeY) != HAL_OK)
+            if (LCD_ShowFloatNumAsync(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
+                                      ptOp->u8Length, ptOp->u8Decimals,
+                                      ptOp->u16Fc, ptOp->u16Bc,
+                                      ptOp->u8SizeY) != E_OK)
             {
                 return 1u;
             }
@@ -138,13 +138,13 @@ static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
  * @note   填充与字符串为阻塞输出，返回时即已完成，恒为"完成"；
  *         整数/浮点为 DMA 异步输出，需等待 LCD 的 DMA 忙标志清零。
  *         （DMA 忙标志由 bsp_spi.c 的 DMA1_Channel3 中断维护，
- *           并在 st7789v.c 的 LCD_IsDmaBusy() 中叠加字段级状态。）
+ *           并在 st7789v.c 的 LCD_IsTransferBusy() 中叠加字段级状态。）
  */
 static uint8_t BspLcdOpFinished(const tBspLcdOpDef *ptOp)
 {
     (void)ptOp;
 
-    return (LCD_IsDmaBusy() == 0u) ? 1u : 0u;
+    return (LCD_IsTransferBusy() == 0u) ? 1u : 0u;
 }
 
 /**
@@ -218,7 +218,7 @@ void BspLcdShowUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
         return;
     }
 
-    (void)LCD_ShowIntNumDma(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
+    (void)LCD_ShowIntNumAsync(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
 }
 
 void BspLcdShowFloat(uint16_t u16X, uint16_t u16Y, float f32Value, uint8_t u8Length,
@@ -229,7 +229,7 @@ void BspLcdShowFloat(uint16_t u16X, uint16_t u16Y, float f32Value, uint8_t u8Len
         return;
     }
 
-    (void)LCD_ShowFloatNumDma(u16X, u16Y, f32Value, u8Length, u8Decimals, u16Fc, u16Bc, 24u);
+    (void)LCD_ShowFloatNumAsync(u16X, u16Y, f32Value, u8Length, u8Decimals, u16Fc, u16Bc, 24u);
 }
 
 void BspLcdBeginRefresh(uint8_t u8StateId)

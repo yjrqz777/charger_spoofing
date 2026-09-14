@@ -24,7 +24,7 @@ static inline uint8_t button_read_level(Button* handle);
  * @brief  读取指定按键的 GPIO 电平
  * @param[in] u8ButtonId  按键编号（1 起）
  * @return 引脚电平（1 = 高/未按下，0 = 低/按下）
- * @note   已由 STM32 HAL 移植为 WCH 标准外设库实现。
+ * @note   使用 CH32X035 WCH 标准外设库读取 GPIO 输入电平。
  *         引脚定义来自 Code/main.h：
  *           KEY1 = PB3，KEY2 = PB7，KEY3 = PB6（本板共 3 个按键）
  *         按键为低电平有效（外部 10k 上拉 + 10nF 消抖）。

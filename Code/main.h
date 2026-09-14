@@ -63,20 +63,20 @@ typedef enum
  * ========================================================================== */
 
 /* ---- 4.1 LCD (ST7789V, 硬件 SPI1) ---- *
- * NETLIST: LCD_SCK=PA4(SPI1_SCK), LCD_SDA=PA7(SPI1_MOSI),
- *          LCD_CS=PA2, LCD_DC=PA1, LCD_RES=PA0
+ * NETLIST: LCD_SCK=PA5(SPI1_SCK), LCD_SDA=PA7(SPI1_MOSI),
+ *          LCD_CS=PA3, LCD_DC=PA2, LCD_RES=PA1
  * 注意：本板 LCD 背光 LEDK 直接接地（硬件常亮），无背光控制引脚。 */
 #define LCD_RES_PORT        GPIOA
-#define LCD_RES_PIN         GPIO_Pin_0
+#define LCD_RES_PIN         GPIO_Pin_1
 
 #define LCD_DC_PORT         GPIOA
-#define LCD_DC_PIN          GPIO_Pin_1
+#define LCD_DC_PIN          GPIO_Pin_2
 
 #define LCD_CS_PORT         GPIOA
-#define LCD_CS_PIN          GPIO_Pin_2
+#define LCD_CS_PIN          GPIO_Pin_3
 
 #define LCD_SCK_PORT        GPIOA
-#define LCD_SCK_PIN         GPIO_Pin_4     /* SPI1_SCK  */
+#define LCD_SCK_PIN         GPIO_Pin_5     /* SPI1_SCK  */
 
 #define LCD_SDA_PORT        GPIOA
 #define LCD_SDA_PIN         GPIO_Pin_7     /* SPI1_MOSI */
@@ -95,20 +95,20 @@ typedef enum
 #define BOARD_KEY_NUM       (3u)
 
 /* ---- 4.3 ADC 采样 (12bit, ADC1) ---- *
- * NETLIST: IBUS-ADC=PA3(ADC_IN3), USB-VBUS-ADC=PC0(ADC_IN10),
- *          VOUT-ADC=PC3(ADC_IN13)
+ * NETLIST: IBUS-ADC=PA4(ADC_IN4), USB-VBUS-ADC=PC0(ADC_IN10),
+ *          VOUT-ADC=PA0(ADC_IN0)
  * 依据：数据手册 2.3 节复用表 —— 引脚名后缀 Axx 即 ADC_INxx。 */
 #define ADC_IBUS_PORT       GPIOA
-#define ADC_IBUS_PIN        GPIO_Pin_3
-#define ADC_IBUS_CHANNEL    ADC_Channel_3      /* PA3  A3  */
+#define ADC_IBUS_PIN        GPIO_Pin_4
+#define ADC_IBUS_CHANNEL    ADC_Channel_4      /* PA4  A4  */
 
 #define ADC_VBUS_PORT       GPIOC
 #define ADC_VBUS_PIN        GPIO_Pin_0
 #define ADC_VBUS_CHANNEL    ADC_Channel_10     /* PC0  A10 */
 
-#define ADC_VOUT_PORT       GPIOC
-#define ADC_VOUT_PIN        GPIO_Pin_3
-#define ADC_VOUT_CHANNEL    ADC_Channel_13     /* PC3  A13 */
+#define ADC_VOUT_PORT       GPIOA
+#define ADC_VOUT_PIN        GPIO_Pin_0
+#define ADC_VOUT_CHANNEL    ADC_Channel_0      /* PA0  A0  */
 
 /* ---- 4.4 输出使能 VOUT-EN ---- *
  * NETLIST: MCU PB12 -> R17 1k -> Q3 2N7002 栅极 -> R15 10k -> Q1/Q2 栅极
@@ -117,7 +117,7 @@ typedef enum
 #define VOUT_EN_PIN         GPIO_Pin_12
 
 /* ---- 4.5 指示灯 LED ---- *
- * NETLIST: MCU PB8 -> LED1 -> R37 100R -> GND（低电平点亮） */
+ * NETLIST: MCU PB8 -> LED1 -> R37 100R -> GND（高电平点亮） */
 #define LED_RUN_PORT        GPIOB
 #define LED_RUN_PIN         GPIO_Pin_8
 

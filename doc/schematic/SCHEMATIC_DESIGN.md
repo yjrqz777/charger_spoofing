@@ -50,7 +50,7 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
               │                    ▲
               │                    └── D2 BZT52C10(10V) 钳位 / R8 100kΩ G-S 上拉 / R15 10kΩ 栅极
               │                         └── Q3 2N7002 ◄─ R17 1kΩ ◄─ VOUT-EN(MCU PB12)
-              └── U1 INA180A2IDBVR (增益 50V/V) ─► R16 100Ω ─► IBUS-ADC (MCU PA3)
+              └── U1 INA180A2IDBVR (增益 50V/V) ─► R16 100Ω ─► IBUS-ADC (MCU PA4)
 ```
 
 ---
@@ -89,7 +89,7 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 
 - 采样电阻 **R7 = 10mΩ** 串在 `USB-VBUS`（INA180 IN+ 侧）与 **Q1 源极**（IN− 侧）之间。
 - 供电：VS (5) 接 3V3，C12 100nF 去耦；GND (2) 接 GND。
-- 输出 OUT (1) → **R16 100Ω** → `IBUS-ADC` → MCU PA3(8)，**C11 10nF** 对地做 RC 滤波。
+- 输出 OUT (1) → **R16 100Ω** → `IBUS-ADC` → MCU PA4(9)，**C11 10nF** 对地做 RC 滤波。
 - 量程换算：满量程电流 = 3.3V ÷ 50 ÷ 10mΩ ≈ **6.6 A**（ADC 满量程 3.3V 时）。
 
 ### 2.4 输出通断开关
@@ -107,7 +107,7 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 
 | 通道 | 分压 | 串阻 | 滤波 | MCU 脚 |
 |---|---|---|---|---|
-| VOUT | R9 470kΩ / R13 68kΩ | R11 100Ω → `VOUT-ADC` | C9 100nF | PC3(4) |
+| VOUT | R9 470kΩ / R13 68kΩ | R11 100Ω → `VOUT-ADC` | C9 100nF | PA0(5) |
 | USB-VBUS | R10 470kΩ / R14 68kΩ | R12 100Ω → `USB-VBUS-ADC` | C10 100nF | PC0(3) |
 
 > 另注：`C15` 为 `USB-VBUS-ADC` 节点附近的电容（画在 MCU 左侧 VDD/PC0 区域），归属 ADC 输入网络而非 MCU 电源去耦。
@@ -123,13 +123,13 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 | 1 | PC15/CC2/T2C3_/T1ET_ | USB-CC2 | PD 协商用 CC2（脚旁红点 = 1 脚标记） |
 | 2 | VDD | 3V3 | C13 10µF + C14 1µF 去耦 |
 | 3 | PC0/TX2_/T2C4_/T1C1_/T2BK_/A10 | USB-VBUS-ADC | VBUS 电压采样 |
-| 4 | PC3/T1C4_/T2C3N_/T2C1N_/C1N0/A13 | VOUT-ADC | 输出电压采样 |
-| 5 | PA0/T2C1/CTS2/C1P1/A0 | LCD_RES | LCD 复位 |
-| 6 | PA1/RTS2/T2C2/C1O/O1N2/O2N2/A1 | LCD_DC | LCD 数据/命令 |
-| 7 | PA2/TX2/T2C3/O2O1/T2ET_/A2 | LCD_CS | LCD 片选 |
-| 8 | PA3/T2C4/O1O0/T3C1_/RX2/A3 | IBUS-ADC | 电流采样 |
-| 9 | PA4/CS/O2O0/T3C2_/A4 | LCD_SCK | SPI 时钟 |
-| 10 | PA5/SCK/TX4_/O2N0/A5 | —（悬空） | |
+| 4 | PC3/T1C4_/T2C3N_/T2C1N_/C1N0/A13 | —（悬空） | |
+| 5 | PA0/T2C1/CTS2/C1P1/A0 | VOUT-ADC | 输出电压采样 |
+| 6 | PA1/RTS2/T2C2/C1O/O1N2/O2N2/A1 | LCD_RES | LCD 复位 |
+| 7 | PA2/TX2/T2C3/O2O1/T2ET_/A2 | LCD_DC | LCD 数据/命令 |
+| 8 | PA3/T2C4/O1O0/T3C1_/RX2/A3 | LCD_CS | LCD 片选 |
+| 9 | PA4/CS/O2O0/T3C2_/A4 | IBUS-ADC | 电流采样 |
+| 10 | PA5/SCK/TX4_/O2N0/A5 | LCD_SCK | SPI 时钟 |
 | 11 | PA6/MISO/T3C1/T1BK_/O1N0/A6 | —（悬空） | |
 | 12 | PA7/MOSI/T3C2/T1C1N_/TX1_/O2P0/A7 | LCD_SDA | SPI 数据 |
 | 13 | PB0/TX4/T1C2N_/O1P0/A8 | —（悬空） | |
@@ -159,10 +159,10 @@ USB-VBUS ─► R7 10mΩ ─► Q1/Q2(G200P04D3 背靠背) ─► VOUT ─► CN
 | 1 | NC | 打叉未接 |
 | 2 | NC | 打叉未接 |
 | 3 | SDA | LCD_SDA（MCU PA7/12） |
-| 4 | SCL | LCD_SCK（MCU PA4/9） |
-| 5 | RS | LCD_DC（MCU PA1/6） |
-| 6 | RES | LCD_RES（MCU PA0/5） |
-| 7 | CS | LCD_CS（MCU PA2/7） |
+| 4 | SCL | LCD_SCK（MCU PA5/10） |
+| 5 | RS | LCD_DC（MCU PA2/7） |
+| 6 | RES | LCD_RES（MCU PA1/6） |
+| 7 | CS | LCD_CS（MCU PA3/8） |
 | 8 | GND | GND |
 | 9 | NC | 打叉未接 |
 | 10 | VCC | 3V3 经 R2 100Ω 限流，C6 100nF 去耦 |
@@ -206,7 +206,7 @@ Q4 发射极接 GND，集电极经 R23 100Ω → BUZZER1；蜂鸣器另一端接
 
 ### 5.4 指示灯
 
-`LED`（MCU PB8）→ LED1（LTST-C191KSKT）→ R37 100Ω → GND。
+`LED`（MCU PB8）→ LED1（LTST-C191KSKT）→ R37 100Ω → GND，高电平点亮。
 
 ### 5.5 调试/日志排针
 

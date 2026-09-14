@@ -96,21 +96,21 @@ USB1 Dn1 A7 + Dn2 B7（短接）→ D4（ESD 到 GND）→ `USB-DM`（**未接 M
 | R18 | 100kΩ 栅极下拉到 GND（图上与 R14 标号重叠） |
 
 ### VOUT-ADC
-R9 470kΩ 与 R13 68kΩ 中点 → R11 100Ω → 网络 → U2 PC3 (4)；C9 100nF 对地。
+R9 470kΩ 与 R13 68kΩ 中点 → R11 100Ω → 网络 → U2 PA0 (5)；C9 100nF 对地。
 
 ### USB-VBUS-ADC
 R10 470kΩ 与 R14 68kΩ 中点 → R12 100Ω → 网络 → U2 PC0 (3)；C10 100nF 对地；另有 C15 100nF 在该节点。
 
 ### IBUS-ADC
-U1 INA180 OUT (1) → R16 100Ω → 网络 → U2 PA3 (8)；C11 10nF 对地。
+U1 INA180 OUT (1) → R16 100Ω → 网络 → U2 PA4 (9)；C11 10nF 对地。
 
 ### LCD_CS / LCD_RES / LCD_DC / LCD_SCK / LCD_SDA
 | 网络 | LCD1 脚 | U2 脚 |
 |---|---|---|
-| LCD_CS | CS (7) | PA2 (7) |
-| LCD_RES | RES (6) | PA0 (5) |
-| LCD_DC | RS (5) | PA1 (6) |
-| LCD_SCK | SCL (4) | PA4 (9) |
+| LCD_CS | CS (7) | PA3 (8) |
+| LCD_RES | RES (6) | PA1 (6) |
+| LCD_DC | RS (5) | PA2 (7) |
+| LCD_SCK | SCL (4) | PA5 (10) |
 | LCD_SDA | SDA (3) | PA7 (12) |
 
 ### KEY-1 / KEY-2 / KEY-3
@@ -121,7 +121,7 @@ U1 INA180 OUT (1) → R16 100Ω → 网络 → U2 PA3 (8)；C11 10nF 对地。
 | KEY-3 | SW3 TS24CA | R21 10kΩ→3V3 | C18 10nF | PB6 (17) |
 
 ### LED
-U2 PB8 (19) → LED1 LTST-C191KSKT → R37 100Ω → GND。
+U2 PB8 (19) → LED1 LTST-C191KSKT → R37 100Ω → GND，高电平点亮。
 
 ### WS2812
 U2 PB9 (20) → R26 100Ω → U6 DIN(4) → U6 DOUT(2) → U5 DIN → U5 DOUT → U4 DIN → U4 DOUT → U3 DIN → U3 DOUT 悬空。

@@ -3,8 +3,8 @@
  * @brief   LCD 专用 SPI1 底层驱动实现
  *******************************************************************************
  * @note    关键设计：
- *          1) SPI1 只用 TX，配置为 1 线只发（SPI_Direction_1Line_Tx）可避免
- *             读溢出干扰；但为兼容保留全双工语义，此处使用 2 线全双工 + 只发。
+ *          1) SPI1 只用 TX，配置为 1 线只发（SPI_Direction_1Line_Tx），避免
+ *             在没有 MISO 的 LCD 总线上累积接收溢出标志。
  *          2) DMA 用于刷屏：一次传输完成后由 DMA1_Channel3 中断置空闲标志，
  *             应用层（bsp_lcd.c 的字段状态机）据此推进下一个字段。
  *          3) 传输前必须清 TC 标志，否则 DMA_Cmd 使能后请求无法产生。
@@ -41,7 +41,7 @@ void BspSpiInit(void)
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);
 
-    /* 2) SCK(PA4) / MOSI(PA7) 复用推挽输出
+    /* 2) SCK(PA5) / MOSI(PA7) 复用推挽输出
      *    注意：默认复用功能，无需 AFIO 重映射 */
     GPIO_InitStructure.GPIO_Pin   = LCD_SCK_PIN | LCD_SDA_PIN;
     GPIO_InitStructure.GPIO_Mode  = GPIO_Mode_AF_PP;
@@ -51,7 +51,7 @@ void BspSpiInit(void)
     /* 3) SPI1 主机模式配置
      *    CPOL=0 / CPHA=0 -> SPI Mode 0（SCK 空闲低、上升沿采样），ST7789V 常用模式
      *    速率：48MHz / 4 = 12MHz */
-    SPI_InitStructure.SPI_Direction         = SPI_Direction_2Lines_FullDuplex;
+    SPI_InitStructure.SPI_Direction         = SPI_Direction_1Line_Tx;
     SPI_InitStructure.SPI_Mode              = SPI_Mode_Master;
     SPI_InitStructure.SPI_DataSize          = SPI_DataSize_8b;
     SPI_InitStructure.SPI_CPOL              = SPI_CPOL_Low;
@@ -130,11 +130,16 @@ void BspSpiWriteBufferBlocking(const uint8_t *pu8Data, uint16_t u16Len)
     }
 }
 
-uint8_t BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len)
+eStatusDef BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len)
 {
-    if ((pu8Data == 0) || (u16Len == 0u) || (s_u8SpiDmaIdle == 0u))
+    if ((pu8Data == 0) || (u16Len == 0u))
     {
-        return 1u;
+        return E_ERROR;
+    }
+
+    if (s_u8SpiDmaIdle == 0u)
+    {
+        return E_BUSY;
     }
 
     s_u8SpiDmaIdle = 0u;
@@ -149,7 +154,7 @@ uint8_t BspSpiWriteBufferDma(const uint8_t *pu8Data, uint16_t u16Len)
     SPI_I2S_DMACmd(SPI1, SPI_I2S_DMAReq_Tx, ENABLE);
     DMA_Cmd(DMA1_Channel3, ENABLE);
 
-    return 0u;
+    return E_OK;
 }
 
 uint8_t BspSpiIsIdle(void)

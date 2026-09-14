@@ -67,9 +67,9 @@ void BspBoardInit(void)
 
     /* 2) 先输出安全电平，再配置为输出，避免上电瞬间误动作
      *    VOUT-EN 为高有效 -> 置低 = 输出关断
-     *    LED 为低电平点亮 -> 置高 = 熄灭 */
+     *    LED 为高电平点亮 -> 置低 = 熄灭 */
     GPIO_ResetBits(VOUT_EN_PORT, VOUT_EN_PIN);
-    GPIO_SetBits(LED_RUN_PORT, LED_RUN_PIN);
+    GPIO_ResetBits(LED_RUN_PORT, LED_RUN_PIN);
 
     /* 3) LCD 控制线：RES / DC / CS 推挽输出，初始 CS=1、DC=1、RES=1（复位释放） */
     GPIO_SetBits(LCD_CS_PORT,  LCD_CS_PIN);
@@ -118,13 +118,13 @@ uint8_t BspBoardGetVoutEnable(void)
 
 void BspBoardSetLed(uint8_t u8On)
 {
-    /* LED 为低电平点亮：点亮 -> 输出低；熄灭 -> 输出高 */
+    /* LED 为高电平点亮：点亮 -> 输出高；熄灭 -> 输出低 */
     if (u8On != 0u)
     {
-        GPIO_ResetBits(LED_RUN_PORT, LED_RUN_PIN);
+        GPIO_SetBits(LED_RUN_PORT, LED_RUN_PIN);
     }
     else
     {
-        GPIO_SetBits(LED_RUN_PORT, LED_RUN_PIN);
+        GPIO_ResetBits(LED_RUN_PORT, LED_RUN_PIN);
     }
 }
