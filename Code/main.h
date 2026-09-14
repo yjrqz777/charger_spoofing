@@ -61,8 +61,8 @@ typedef enum
  *  MCU: CH32X035G8U6 (QFN-28)
  * ========================================================================== */
 
-/* ---- 4.1 LCD (ST7789V, 硬件 SPI1) ---- *
- * NETLIST: LCD_SCK=PA5(SPI1_SCK), LCD_SDA=PA7(SPI1_MOSI),
+/* ---- 4.1 LCD (ST7789V, GPIO 模拟 SPI Mode 2) ---- *
+ * NETLIST: LCD_SCK=PA5，LCD_SDA=PA7，
  *          LCD_CS=PA3, LCD_DC=PA2, LCD_RES=PA1
  * 注意：本板 LCD 背光 LEDK 直接接地（硬件常亮），无背光控制引脚。 */
 #define LCD_RES_PORT        GPIOA
@@ -75,10 +75,10 @@ typedef enum
 #define LCD_CS_PIN          GPIO_Pin_3
 
 #define LCD_SCK_PORT        GPIOA
-#define LCD_SCK_PIN         GPIO_Pin_5     /* SPI1_SCK  */
+#define LCD_SCK_PIN         GPIO_Pin_5
 
 #define LCD_SDA_PORT        GPIOA
-#define LCD_SDA_PIN         GPIO_Pin_7     /* SPI1_MOSI */
+#define LCD_SDA_PIN         GPIO_Pin_7
 
 /* ---- 4.2 按键 (低电平有效, 外部 10k 上拉 + 10nF 消抖) ---- */
 #define KEY1_PORT           GPIOB

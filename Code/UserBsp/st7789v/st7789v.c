@@ -53,11 +53,11 @@ static void LCD_BufferRenderString(const uint8_t *pu8Characters, uint8_t u8Lengt
     }
 }
 /**
- * @brief  SPI 发送字节（阻塞模式，CH32X035 SPI1）
+ * @brief  SPI 发送字节（GPIO 模拟 Mode 2）
  * @param[in] TxData  待发送的数据
  * @param[in] size    发送字节数
  * @retval 0          发送成功
- * @note   数据通过项目的 WCH SPI1 板级接口发送。
+ * @note   数据通过项目的 GPIO 模拟 SPI 板级接口发送。
  */
 uint8_t SPI_WriteByte(uint8_t TxData, uint16_t size)
 {
@@ -235,11 +235,6 @@ void st7789v_init(void)
     Delay_Ms(100);
     printf("[LCD] hardware reset released\r\n");
 
-    /* Software reset ensures a known register state after a slow or noisy power ramp. */
-    LCD_Write_Cmd(0x01);
-    Delay_Ms(150);
-    printf("[LCD] software reset sent\r\n");
-
     /* 退出睡眠模式 */
     LCD_Write_Cmd(0x11);
     Delay_Ms(120);
@@ -251,7 +246,7 @@ void st7789v_init(void)
 
 
     LCD_Write_Cmd(0x3a);
-    LCD_Write_Data(0x55); /* 16-bit RGB565 for control and RGB interfaces. */
+    LCD_Write_Data(0x05); /* Match the verified module's 16-bit control-interface format. */
     //--------------------------------ST7789V Frame rate setting-----------------
 
     LCD_Write_Cmd(0xb2);

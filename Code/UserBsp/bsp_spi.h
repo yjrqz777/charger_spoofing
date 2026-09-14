@@ -1,6 +1,6 @@
 /**
  * @file bsp_spi.h
- * @brief Declares the polling SPI1 interface used by the LCD.
+ * @brief Declares the GPIO-driven software SPI interface used by the LCD.
  */
 
 #ifndef __BSP_SPI_H__

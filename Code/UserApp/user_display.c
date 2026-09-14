@@ -2,7 +2,7 @@
  * @file    user_display.c
  * @brief   用户显示任务实现 — 单页实时数据面板
  *******************************************************************************
- * @note    屏幕：240x135 横屏（ST7789V，SPI1 轮询发送）
+ * @note    屏幕：240x135 横屏（ST7789V，GPIO 模拟 SPI）
  *
  *          界面布局（24 号字，每行 24 像素）：
  *            +--------------------------------------------+
@@ -56,14 +56,18 @@ static uint16_t s_u16DiagnosticAcc = 0u;
 
 /**
  * @brief  初始化显示模块
- * @note   初始化 LCD 与 SPI1。包含初始化延时，仅上电时执行一次。
+ * @note   初始化 LCD 与 GPIO 模拟 SPI。包含初始化延时，仅上电时执行一次。
  */
 void UsrDisplayInit(void)
 {
+#if LCD_IO_STATIC_TEST_ENABLE
+    printf("[DISPLAY] LCD IO static-level test active; controller init disabled\r\n");
+#else
     printf("[DISPLAY] initialization begin\r\n");
     BspLcdInit();
     printf("[DISPLAY] initialization end, spi_error=%u\r\n",
            (unsigned int)BspSpiHasError());
+#endif
 
     s_u8ScreenCleared = 0u;
     s_u8StaticDrawn   = 0u;
@@ -240,6 +244,11 @@ uint16_t UsrDisplayTask(void)
     while (1)
     {
         PT_WAIT_UNTIL(USR_DISPLAY_TASK_INTERVAL_MS / OS_TICK_MS);
+
+#if LCD_IO_STATIC_TEST_ENABLE
+        /* Keep the LCD bus untouched while probing the five signals. */
+        continue;
+#endif
 
         /* 状态改变时复位"静态内容已画"标志，强制重画界面骨架 */
         {

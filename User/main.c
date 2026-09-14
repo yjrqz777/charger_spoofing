@@ -48,7 +48,7 @@
  *           2) 串口打印（可选，用于调试日志）
  *           3) 板级 GPIO（含 LCD 控制线与按键、输出使能的安全默认电平）
  *           4) 1ms 时间片节拍（TIM3）—— 必须在任何依赖 BspTickGetMs 的驱动之前
- *           5) SPI1 轮询发送（LCD 输出通道）
+ *           5) GPIO 模拟 SPI（LCD 输出通道）
  */
 static void SystemInit_User(void)
 {
@@ -76,7 +76,7 @@ static void SystemInit_User(void)
     BspTickInit();
     printf("[TICK] TIM3 1ms started\r\n");
 
-    /* 5) LCD 的 SPI1 轮询发送接口 */
+    /* 5) LCD 的 GPIO 模拟 SPI 接口 */
     BspSpiInit();
     printf("[BOOT] scheduler start\r\n");
 }

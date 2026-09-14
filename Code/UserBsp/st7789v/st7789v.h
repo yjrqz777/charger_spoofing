@@ -6,9 +6,9 @@
  *          提供点、线、矩形、圆、汉字、字符、字符串、数字、图片等绘图接口
  *
  *          硬件接口（已移植到 CH32X035 + WCH 标准外设库）：
- *            - SPI1 主机：SCK = PA5，MOSI(SDA) = PA7
+ *            - GPIO 模拟 SPI：SCK = PA5，MOSI(SDA) = PA7
  *            - GPIO：CS = PA3，DC = PA2，RES = PA1
- *            - LCD 数据使用 SPI1 轮询发送，不使用 DMA
+ *            - LCD 数据使用 GPIO 模拟 Mode 2，不使用 SPI1 或 DMA
  *          引脚定义来自 Code/main.h，与原理图 NETLIST 一致。
  *******************************************************************************
  */

@@ -8,6 +8,10 @@
 #ifndef __USER_CONFIG_H__
 #define __USER_CONFIG_H__
 
-/* 在此处添加用户自定义配置项 */
+/** @brief Enable a static level test on every MCU-controlled LCD signal. */
+#define LCD_IO_STATIC_TEST_ENABLE (0u)
+
+/** @brief Static LCD test level: 0 drives low and 1 drives high. */
+#define LCD_IO_STATIC_TEST_LEVEL (0u)
 
 #endif /* __USER_CONFIG_H__ */
