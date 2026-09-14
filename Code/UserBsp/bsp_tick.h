@@ -7,7 +7,7 @@
  *
  *          选型依据（见 CH32X035_1ms_tick_analysis.md）：
  *            - CH32X035 仅有 TIM1/TIM2（高级）+ TIM3（通用），无 TIM4；
- *            - TIM2 留给 WS2812 的 PWM+DMA，故 tick 选 TIM3；
+ *            - 当前工程未占用 TIM3，故使用 TIM3 并保留 TIM1/TIM2 给后续控制功能；
  *            - 纯内部 CK_INT 时钟源，不需要任何 GPIO/AFIO 重映射。
  *
  *          参数：fTIMxCLK = HCLK = 48MHz

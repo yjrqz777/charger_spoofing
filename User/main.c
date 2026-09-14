@@ -12,7 +12,7 @@
  * @brief   应用入口：初始化各层驱动，然后用 Protothread 时间片调度四个任务
  *******************************************************************************
  * @note    时间片机制（见 Code/Task.h）：
- *            - TIM3 每 1ms 进一次中断，递减 PT_TICK[] 数组（见 Code/UserDrv/bsp_tick.c）；
+ *            - TIM3 每 1ms 进一次中断，递减 PT_TICK[] 数组（见 Code/UserBsp/bsp_tick.c）；
  *            - 主循环里用 PT_TASK_REG(Rank, Func) 轮询四个任务，
  *              某任务的倒计时归零时才调用其函数，函数内 PT_WAIT_UNTIL 返回下次等待时间。
  *

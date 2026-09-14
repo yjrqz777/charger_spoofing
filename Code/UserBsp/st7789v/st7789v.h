@@ -18,7 +18,7 @@
 #include "main.h"
 #include "bsp_spi.h"
 
-#include "stdio.h"
+#include <stdio.h>
 
 /* 显示驱动错误码类型别名（沿用旧签名命名，实为 WCH 库返回类型） */
 typedef uint8_t HAL_StatusTypeDef;
@@ -91,8 +91,8 @@ extern void LCD_color_point(uint16_t x1, uint16_t y1, uint16_t color);
 
 /**
  * @brief  查询 LCD 的 DMA 字段传输是否仍在进行
- * @retval 1  空闲，可发起下一个字段
- * @retval 0  正在传输
+ * @retval 1  正在传输
+ * @retval 0  空闲，可发起下一个字段
  * @note   由 bsp_lcd.c 的字段刷新状态机使用。
  */
 uint8_t LCD_IsDmaBusy(void);

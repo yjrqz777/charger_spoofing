@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#include "Code/user_global.h"
+#include "User_global.h"
 #include "bsp_button.h"
 
 /** @brief 数值调整的步进（预留，供后续可调参数使用） */

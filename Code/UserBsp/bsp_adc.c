@@ -74,9 +74,9 @@ void BspAdcInit(void)
     memset(&ADC_InitStructure, 0, sizeof(ADC_InitStructure));
     memset(&tBspAdcData, 0, sizeof(tBspAdcData));
 
-    /* 1) 时钟：ADC1 在 APB2；ADC 时钟分频 = PCLK2/6 = 8MHz */
+    /* 1) 时钟：使能 ADC1；ADC 时钟 = SYSCLK/6，48MHz 下为 8MHz */
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
-    RCC_ADCCLKConfig(RCC_PCLK2_Div6);
+    ADC_CLKConfig(ADC1, ADC_CLK_Div6);
 
     /* 2) ADC1 基础配置：独立模式、单次转换、软件触发、右对齐、1 个规则通道 */
     ADC_InitStructure.ADC_Mode               = ADC_Mode_Independent;

@@ -7,7 +7,7 @@
  *            - WCH 标准外设库的统一包含入口
  *            - 全板引脚映射（唯一真相来源，来源：原理图 SCH_Schematic1_2026-09-14.pdf）
  *            - 全局宏与调试通道
- *          Task.h / user_global.h / st7789v.h 均包含本文件。
+ *          Task.h / User_global.h / st7789v.h 均包含本文件。
  *
  * @warning 引脚定义必须与原理图保持一致，改动前请核对
  *          doc/schematic/NETLIST.md 与 doc/schematic/SCHEMATIC_DESIGN.md。
@@ -32,6 +32,7 @@ extern "C" {
 #include "ch32x035.h"          /* 器件寄存器定义 + ch32x035_conf.h 外设声明 */
 #include "debug.h"             /* Delay_Init/Delay_Ms/Delay_Us/USART_Printf_Init */
 #include "SEGGER_RTT.h"        /* 调试打印兼容层（本项目内实现，非 SEGGER 官方库） */
+#include "user_config.h"
 
 /* ========================================================================== *
  *  2. 全局类型别名

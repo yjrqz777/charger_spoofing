@@ -8,8 +8,8 @@
  * @YJRQZ777
 ***************************************************************************************************/
 
-#include "Code/UserBsp/st7789v/st7789v.h"
-#include "st7789v/font.h"
+#include "st7789v.h"
+#include "font.h"
 #define LCD_DMA_FONT_SIZE_Y       (24u)
 #define LCD_DMA_FONT_SIZE_X       (LCD_DMA_FONT_SIZE_Y / 2u)
 #define LCD_DMA_MAX_DIGITS        (8u)
@@ -1184,8 +1184,8 @@ HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
 
 /**
  * @brief  查询 LCD 的 DMA 字段传输是否仍在进行
- * @retval 1  空闲，可发起下一个字段
- * @retval 0  正在传输
+ * @retval 1  正在传输
+ * @retval 0  空闲，可发起下一个字段
  * @note   替代原 STM32 版本的 HAL_SPI_TxCpltCallback / HAL_SPI_ErrorCallback。
  *         移植后由 bsp_spi.c 的 DMA1_Channel3 中断维护底层空闲标志，
  *         本函数再叠加 LCD 自身"当前字段"的 busy 标志，
@@ -1193,5 +1193,10 @@ HAL_StatusTypeDef LCD_ShowFloatNumDma(uint16_t x, uint16_t y, float fValue,
  */
 uint8_t LCD_IsDmaBusy(void)
 {
+    if ((u8LcdDmaBusy != 0u) && (BspSpiIsIdle() != 0u))
+    {
+        u8LcdDmaBusy = 0u;
+    }
+
     return u8LcdDmaBusy;
 }

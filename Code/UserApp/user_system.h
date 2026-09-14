@@ -10,7 +10,7 @@
 #ifndef __USER_SYSTEM_H__
 #define __USER_SYSTEM_H__
 
-#include "Code/user_global.h"
+#include "User_global.h"
 
 /** @brief 系统任务调度周期（毫秒） */
 #define USR_SYSTEM_TASK_INTERVAL_MS (5u)

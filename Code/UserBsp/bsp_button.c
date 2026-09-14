@@ -59,17 +59,7 @@ uint8_t BspButtonGetRawMask(void)
 	return RawMask;
 }
 
-/* user_button.c 冻结实现使用的真实兼容符号。 */
-uint8_t BspButton_ReadLevel(uint8_t u8ButtonId)
-{
-    return BspButtonReadLevel(u8ButtonId);
-}
-
-uint8_t BspButton_GetRawMask(void)
-{
-    return BspButtonGetRawMask();
-}
-
+/* Generic multi-button implementation. */
 /**
   * @brief  Initialize the button struct handle
   * @param  handle: the button handle struct

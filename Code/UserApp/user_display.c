@@ -227,6 +227,7 @@ uint16_t UsrDisplayTask(void)
             {
                 if (eLastState != E_SYS_STATE_MAX)
                 {
+                    s_u8ScreenCleared = 0u;
                     s_u8StaticDrawn = 0u;
                 }
                 eLastState = tSysData.eState;

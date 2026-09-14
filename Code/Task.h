@@ -20,20 +20,20 @@
  * @name   Protothread 状态常量
  * @{
  */
-#define PT_WAITING  0  /**< 任务等待中（定时器未到） */
-#define PT_YIELDED  1  /**< 任务主动让出 CPU */
-#define PT_EXITED   2  /**< 任务已退出 */
-#define PT_ENDED    3  /**< 任务正常结束 */
+#define PT_WAITING  (0u)  /**< 任务等待中（定时器未到） */
+#define PT_YIELDED  (1u)  /**< 任务主动让出 CPU */
+#define PT_EXITED   (2u)  /**< 任务已退出 */
+#define PT_ENDED    (3u)  /**< 任务正常结束 */
 /** @} */
 
 /** @brief 最大任务数 */
-#define TASK_MAX 20
+#define TASK_MAX (20u)
 
 /** @brief 定时器间隔（单位：毫秒） */
-#define OS_TICK_MS 1
+#define OS_TICK_MS (1u)
 
 /** @brief 全局任务定时器数组（外部声明） */
-extern unsigned int PT_TICK[TASK_MAX];
+extern volatile uint32_t PT_TICK[TASK_MAX];
 
 /**
  * @brief  注册并执行 protothread 任务
@@ -46,7 +46,7 @@ extern unsigned int PT_TICK[TASK_MAX];
 #define PT_TASK_REG(Rank, Func)   \
     do                            \
     {                             \
-        if (Rank >= TASK_MAX)     \
+        if ((uint32_t)(Rank) >= TASK_MAX) \
         {                         \
             break;                \
         }                         \
@@ -64,7 +64,8 @@ extern unsigned int PT_TICK[TASK_MAX];
 #define TASK_TICK_UPDATE()                                \
     do                                               \
     {                                                \
-        for (unsigned char i = 0; i < TASK_MAX; i++) \
+        uint8_t i;                                      \
+        for (i = 0u; i < TASK_MAX; i++)                 \
         {                                            \
             if (PT_TICK[i] > 0)                  \
             {                                        \
@@ -80,7 +81,7 @@ extern unsigned int PT_TICK[TASK_MAX];
  */
 #define PT_BEGIN()            \
     {                           \
-        char PT_YIELD_FLAG = 1; static unsigned int pt_lc = 0; static unsigned int u32WiatTime_save = 0; \
+        static uint32_t pt_lc = 0u; static uint32_t u32WaitTimeSave = 0u; \
         switch (pt_lc)       \
         {                       \
         default:
@@ -93,23 +94,22 @@ extern unsigned int PT_TICK[TASK_MAX];
 #define PT_END()     \
     }                  \
     ;                  \
-    PT_YIELD_FLAG = 0; \
-    pt_lc = 0;      \
+    pt_lc = 0u;      \
     return PT_ENDED;   \
     }
 
 /**
  * @brief  等待指定时间后继续执行
- * @param[in] u32WiatTime  等待时间（单位为 OS_TICK_MS 的倍数）
+ * @param[in] u32WaitTime  等待时间（单位为 OS_TICK_MS 的倍数）
  * @note   保存当前行号为断点位置，返回等待时间。
  *         下次触发时通过 switch-case 跳转到此行继续执行。
  */
-#define PT_WAIT_UNTIL(u32WiatTime) \
+#define PT_WAIT_UNTIL(u32WaitTime) \
     do                              \
     {                               \
-        u32WiatTime_save = u32WiatTime; \
+        u32WaitTimeSave = (uint32_t)(u32WaitTime); \
         pt_lc = __LINE__;        \
-        return u32WiatTime;            \
+        return (uint16_t)u32WaitTimeSave; \
     } while (0);                    \
     case __LINE__:;
 
@@ -121,7 +121,7 @@ extern unsigned int PT_TICK[TASK_MAX];
 #define PT_RESTART()     \
     do                     \
     {                      \
-        pt_lc = 0;      \
+        pt_lc = 0u;      \
         return PT_WAITING; \
     } while (0)
 
@@ -133,7 +133,7 @@ extern unsigned int PT_TICK[TASK_MAX];
 #define PT_EXIT()       \
     do                    \
     {                     \
-        return u32WiatTime_save; \
+        return (uint16_t)u32WaitTimeSave; \
     } while (0)
 
 #endif /* __TASK_H__ */

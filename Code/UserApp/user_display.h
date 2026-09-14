@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#include "Code/user_global.h"
+#include "User_global.h"
 #include "user_system.h"
 
 /** @brief 显示任务调度周期（毫秒） */

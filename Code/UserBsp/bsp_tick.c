@@ -23,7 +23,7 @@
  * @note  Task.h 中仅有 extern 声明，全工程必须且只能在此处定义一次。
  *        调度器通过 PT_TASK_REG() 写入"下次唤醒倒计时"，TIM3 中断里递减。
  */
-unsigned int PT_TICK[TASK_MAX] = {0};
+volatile uint32_t PT_TICK[TASK_MAX] = {0u};
 
 /** @brief 系统毫秒计数 */
 static volatile uint32_t s_u32TickMs = 0u;
@@ -44,7 +44,7 @@ void BspTickInit(void)
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);
 
     /* 2) 1ms 时基：PSC=47 -> 1MHz；ARR=999 -> 1ms */
-    TIM_TimeBaseStructure.TIM_Prescaler         = (uint16_t)(BOARD_SYSCLK_HZ / 1000000u) - 1u; /* 48-1 = 47 */
+    TIM_TimeBaseStructure.TIM_Prescaler         = (uint16_t)(SystemCoreClock / 1000000u) - 1u; /* 48-1 = 47 */
     TIM_TimeBaseStructure.TIM_Period            = (uint16_t)(1000u / BOARD_TICK_MS) - 1u;      /* 1000-1 = 999 */
     TIM_TimeBaseStructure.TIM_ClockDivision     = TIM_CKD_DIV1;
     TIM_TimeBaseStructure.TIM_CounterMode       = TIM_CounterMode_Up;   /* TIM3 恒为增计数，此成员被忽略 */

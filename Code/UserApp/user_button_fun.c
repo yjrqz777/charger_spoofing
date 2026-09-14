@@ -47,35 +47,3 @@ void UsrButtonValueInc(Button *ptButton)
     /* 预留：后续如需可调参数在此实现加操作 */
     SEGGER_RTT_printf(0, "KEY3 value +\r\n");
 }
-
-/* ===================== 对外门面（供上层调用） ===================== */
-
-void UsrButtonInit(void)
-{
-    buttons_init();
-}
-
-uint8_t UsrButtonGetRawMask(void)
-{
-    return UserButton_GetRawMask();
-}
-
-uint8_t UsrButtonGetPressed(uint8_t u8ButtonId)
-{
-    return UserButton_GetPressed(u8ButtonId);
-}
-
-uint8_t UsrButtonGetPressedMask(void)
-{
-    return UserButton_GetPressedMask();
-}
-
-uint8_t UsrButtonGetLastEvent(uint8_t u8ButtonId)
-{
-    return UserButton_GetLastEvent(u8ButtonId);
-}
-
-uint16_t UsrButtonTask(void)
-{
-    return PtTaskButton();
-}

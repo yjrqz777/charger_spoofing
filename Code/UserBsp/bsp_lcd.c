@@ -359,6 +359,17 @@ void BspLcdService(uint8_t u8StateId)
         s_u8RefreshInFlight  = (s_u8ActiveCount != 0u) ? 1u : 0u;
         s_u8RefreshRequested = 0u;
         s_u32OpStartMs       = BspTickGetMs();
+
+        /* 接管新帧时立即启动第 0 条操作，后续时间片再检查完成状态。 */
+        if (s_u8RefreshInFlight != 0u)
+        {
+            if (BspLcdOutputOp(&s_atActiveOp[0]) != 0u)
+            {
+                s_u8RefreshInFlight = 0u;
+                s_u8ActiveCount = 0u;
+            }
+            return;
+        }
     }
 
     /* 3) 推进当前活动帧 */

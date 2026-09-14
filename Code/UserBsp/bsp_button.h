@@ -72,10 +72,6 @@ extern "C" {
 uint8_t BspButtonReadLevel(uint8_t u8ButtonId);
 uint8_t BspButtonGetRawMask(void);
 
-// Frozen user_button.c compatibility symbols
-uint8_t BspButton_ReadLevel(uint8_t u8ButtonId);
-uint8_t BspButton_GetRawMask(void);
-
 // Generic multi-button public API
 void button_init(Button* handle, uint8_t(*pin_level)(uint8_t), uint8_t active_level, uint8_t button_id);
 void button_attach(Button* handle, ButtonEvent event, BtnCallback cb);
