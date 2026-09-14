@@ -2,7 +2,7 @@
  * @file    user_display.c
  * @brief   用户显示任务实现 — 单页实时数据面板
  *******************************************************************************
- * @note    屏幕：240x135 横屏（ST7789V，SPI1 + DMA）
+ * @note    屏幕：240x135 横屏（ST7789V，SPI1 轮询发送）
  *
  *          界面布局（24 号字，每行 24 像素）：
  *            +--------------------------------------------+
@@ -13,9 +13,9 @@
  *            | POUT   15.18 W                             |  第 4 行 y=106
  *            +--------------------------------------------+
  *
- *          刷新策略（配合 BspLcdService 的非阻塞字段状态机）：
+ *          刷新策略（配合 BspLcdService 的分时字段状态机）：
  *            - 每 100ms 采样一次 ADC；
- *            - 每 100ms 组装一帧显示请求，由 BspLcdService() 逐条异步输出；
+ *            - 每 100ms 组装一帧显示请求，由 BspLcdService() 每个时间片输出一条；
  *            - 整屏填充只在进入状态时执行一次（阻塞约 200ms）。
  *******************************************************************************
  */
@@ -56,7 +56,7 @@ static uint16_t s_u16DiagnosticAcc = 0u;
 
 /**
  * @brief  初始化显示模块
- * @note   初始化 LCD 与 SPI/DMA。含约 420ms 的初始化延时，仅上电时执行一次。
+ * @note   初始化 LCD 与 SPI1。包含初始化延时，仅上电时执行一次。
  */
 void UsrDisplayInit(void)
 {
@@ -75,7 +75,7 @@ void UsrDisplayInit(void)
 /**
  * @brief  绘制静态内容（顶栏与行标签）
  * @note   只在状态变化后执行一次，走阻塞输出（字符串接口），
- *         此时 DMA 空闲，不会与字段状态机冲突。
+ *         此时没有排队字段，不会与字段状态机冲突。
  */
 static void UsrDisplayDrawStatic(void)
 {
@@ -89,8 +89,7 @@ static void UsrDisplayDrawStatic(void)
 /**
  * @brief  刷新一帧实时数据
  * @param[in] ptData  采样数据
- * @note   走非阻塞字段状态机：本函数只做内存写入与 DMA 发起，
- *         实际逐条输出由 BspLcdService() 在每个时间片推进。
+ * @note   本函数只写请求队列，实际输出由 BspLcdService() 分时间片推进。
  */
 static void UsrDisplayRefreshFrame(const tBspAdcDataDef *ptData)
 {
@@ -179,7 +178,7 @@ static void UsrDisplayRunningState(void)
         BspAdcUpdateAll();
     }
 
-    /* 刷新累加：周期到且当前无 DMA 传输时发起新一帧 */
+    /* 刷新累加：周期到时提交一帧字段请求 */
     s_u16RefreshAcc += USR_DISPLAY_TASK_INTERVAL_MS;
     if (s_u16RefreshAcc >= USR_DISPLAY_REFRESH_MS)
     {
@@ -194,12 +193,11 @@ static void UsrDisplayRunningState(void)
     {
         s_u16DiagnosticAcc = 0u;
         ptData = BspAdcGetData();
-        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x dma_idle=%u spi_error=%u\r\n",
+        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x spi_error=%u\r\n",
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VBUS],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VOUT],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_IBUS],
                (unsigned int)BspButtonGetRawMask(),
-               (unsigned int)BspSpiIsIdle(),
                (unsigned int)BspSpiHasError());
     }
 }
@@ -268,7 +266,7 @@ uint16_t UsrDisplayTask(void)
             }
         }
 
-        /* 推进 LCD 字段状态机（非阻塞，每时间片一次） */
+        /* 推进 LCD 字段状态机，每个时间片最多轮询输出一个字段。 */
         BspLcdService((uint8_t)tSysData.eState);
     }
     PT_END();

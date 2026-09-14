@@ -5,25 +5,24 @@
 
 #include "st7789v.h"
 #include "font.h"
-#define LCD_DMA_FONT_SIZE_Y       (24u)
-#define LCD_DMA_FONT_SIZE_X       (LCD_DMA_FONT_SIZE_Y / 2u)
-#define LCD_DMA_MAX_DIGITS        (8u)
-#define LCD_DMA_BUFFER_BYTES      (LCD_DMA_MAX_DIGITS * LCD_DMA_FONT_SIZE_X * LCD_DMA_FONT_SIZE_Y * 2u)
+#define LCD_BUFFER_FONT_SIZE_Y       (24u)
+#define LCD_BUFFER_FONT_SIZE_X       (LCD_BUFFER_FONT_SIZE_Y / 2u)
+#define LCD_BUFFER_MAX_DIGITS        (8u)
+#define LCD_BUFFER_BYTES             (LCD_BUFFER_MAX_DIGITS * LCD_BUFFER_FONT_SIZE_X * LCD_BUFFER_FONT_SIZE_Y * 2u)
 
-static uint8_t au8LcdDmaBuffer[LCD_DMA_BUFFER_BYTES];
-static volatile uint8_t u8LcdDmaBusy = 0u;
+static uint8_t au8LcdBuffer[LCD_BUFFER_BYTES];
 
-static void LCD_DmaWritePixel(uint16_t u16Color, uint32_t *pu32Index)
+static void LCD_BufferWritePixel(uint16_t u16Color, uint32_t *pu32Index)
 {
-    au8LcdDmaBuffer[*pu32Index] = (uint8_t)(u16Color >> 8u);
+    au8LcdBuffer[*pu32Index] = (uint8_t)(u16Color >> 8u);
     (*pu32Index)++;
-    au8LcdDmaBuffer[*pu32Index] = (uint8_t)u16Color;
+    au8LcdBuffer[*pu32Index] = (uint8_t)u16Color;
     (*pu32Index)++;
 }
 
-static void LCD_DmaRenderString(const uint8_t *pu8Characters, uint8_t u8Length,
-                                 uint16_t u16Foreground, uint16_t u16Background,
-                                 uint32_t *pu32Index)
+static void LCD_BufferRenderString(const uint8_t *pu8Characters, uint8_t u8Length,
+                                    uint16_t u16Foreground, uint16_t u16Background,
+                                    uint32_t *pu32Index)
 {
     uint8_t u8Byte;
     uint8_t u8Character;
@@ -32,8 +31,8 @@ static void LCD_DmaRenderString(const uint8_t *pu8Characters, uint8_t u8Length,
     uint8_t u8Row;
     uint8_t u8BytesPerRow;
 
-    u8BytesPerRow = (uint8_t)((LCD_DMA_FONT_SIZE_X + 7u) / 8u);
-    for (u8Row = 0u; u8Row < LCD_DMA_FONT_SIZE_Y; u8Row++)
+    u8BytesPerRow = (uint8_t)((LCD_BUFFER_FONT_SIZE_X + 7u) / 8u);
+    for (u8Row = 0u; u8Row < LCD_BUFFER_FONT_SIZE_Y; u8Row++)
     {
         for (u8DigitIndex = 0u; u8DigitIndex < u8Length; u8DigitIndex++)
         {
@@ -44,11 +43,11 @@ static void LCD_DmaRenderString(const uint8_t *pu8Characters, uint8_t u8Length,
             }
             u8Character -= (uint8_t)' ';
 
-            for (u8Column = 0u; u8Column < LCD_DMA_FONT_SIZE_X; u8Column++)
+            for (u8Column = 0u; u8Column < LCD_BUFFER_FONT_SIZE_X; u8Column++)
             {
                 u8Byte = ascii_2412[u8Character][(uint16_t)u8Row * u8BytesPerRow + u8Column / 8u];
-                LCD_DmaWritePixel((u8Byte & (1u << (u8Column % 8u))) != 0u ?
-                                  u16Foreground : u16Background, pu32Index);
+                LCD_BufferWritePixel((u8Byte & (1u << (u8Column % 8u))) != 0u ?
+                                     u16Foreground : u16Background, pu32Index);
             }
         }
     }
@@ -236,6 +235,11 @@ void st7789v_init(void)
     Delay_Ms(100);
     printf("[LCD] hardware reset released\r\n");
 
+    /* Software reset ensures a known register state after a slow or noisy power ramp. */
+    LCD_Write_Cmd(0x01);
+    Delay_Ms(150);
+    printf("[LCD] software reset sent\r\n");
+
     /* 退出睡眠模式 */
     LCD_Write_Cmd(0x11);
     Delay_Ms(120);
@@ -311,9 +315,9 @@ void st7789v_init(void)
     LCD_Write_Cmd(0x21);
     LCD_Write_Cmd(0x29);
     Delay_Ms(20);
-    printf("[LCD] display-on sent, filling test background\r\n");
+    printf("[LCD] display-on sent, filling red test background\r\n");
 
-    LCD_Fill(0, 0, 240, 135,WHITE);
+    LCD_Fill(0, 0, 240, 135, RED);
     printf("[LCD] init complete, spi_error=%u\r\n", (unsigned int)BspSpiHasError());
 }
 
@@ -919,26 +923,20 @@ void LCD_ShowPicture(uint16_t x,uint16_t y,uint16_t length,uint16_t width,const 
 }
 
 
-eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
-                               uint16_t fc, uint16_t bc, uint8_t sizey)
+eStatusDef LCD_ShowIntNumBuffered(uint16_t x, uint16_t y, uint32_t num, uint8_t len,
+                                  uint16_t fc, uint16_t bc, uint8_t sizey)
 {
-    uint8_t au8Characters[LCD_DMA_MAX_DIGITS];
+    uint8_t au8Characters[LCD_BUFFER_MAX_DIGITS];
     uint8_t u8Digit;
     uint8_t u8ShowDigit = 0u;
     uint8_t u8Index;
     uint32_t u32BufferIndex = 0u;
-    eStatusDef eStatus;
 
-    if ((sizey != LCD_DMA_FONT_SIZE_Y) || (len == 0u) || (len > LCD_DMA_MAX_DIGITS) ||
-        ((uint32_t)x + (uint32_t)len * LCD_DMA_FONT_SIZE_X > LCD_W) ||
-        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H))
+    if ((sizey != LCD_BUFFER_FONT_SIZE_Y) || (len == 0u) || (len > LCD_BUFFER_MAX_DIGITS) ||
+        ((uint32_t)x + (uint32_t)len * LCD_BUFFER_FONT_SIZE_X > LCD_W) ||
+        ((uint32_t)y + LCD_BUFFER_FONT_SIZE_Y > LCD_H))
     {
         return E_ERROR;
-    }
-
-    if ((u8LcdDmaBusy != 0u) || (BspSpiIsIdle() == 0u))
-    {
-        return E_BUSY;
     }
 
     for (u8Index = 0u; u8Index < len; u8Index++)
@@ -954,21 +952,16 @@ eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len
             au8Characters[u8Index] = (uint8_t)('0' + u8Digit);
         }
     }
-    LCD_DmaRenderString(au8Characters, len, fc, bc, &u32BufferIndex);
-    LCD_Address_Set(x, y, (uint16_t)(x + len * LCD_DMA_FONT_SIZE_X - 1u),
-                    (uint16_t)(y + LCD_DMA_FONT_SIZE_Y - 1u));
+    LCD_BufferRenderString(au8Characters, len, fc, bc, &u32BufferIndex);
+    LCD_Address_Set(x, y, (uint16_t)(x + len * LCD_BUFFER_FONT_SIZE_X - 1u),
+                    (uint16_t)(y + LCD_BUFFER_FONT_SIZE_Y - 1u));
     LCD_DC(DATA);
-    u8LcdDmaBusy = 1u;
-    eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
-    if (eStatus != E_OK)
-    {
-        u8LcdDmaBusy = 0u;
-    }
-    return eStatus;
+    BspSpiWriteBufferBlocking(au8LcdBuffer, (uint16_t)u32BufferIndex);
+    return (BspSpiHasError() == 0u) ? E_OK : E_ERROR;
 }
 
 /**
- * @brief  DMA 方式显示浮点数（指定小数位数）
+ * @brief  使用行缓冲和轮询 SPI 显示浮点数（指定小数位数）
  * @param[in] x,y         显示左上角坐标
  * @param[in] fValue      待显示的浮点数值（支持负数）
  * @param[in] u8Length     总字符宽度（含小数点、符号位）
@@ -976,18 +969,17 @@ eStatusDef LCD_ShowIntNumAsync(uint16_t x, uint16_t y, uint32_t num, uint8_t len
  * @param[in] fc           前景色
  * @param[in] bc           背景色
  * @param[in] sizey        字号（仅支持 24）
- * @retval E_OK     DMA 传输已启动
+ * @retval E_OK     数据发送完成
  * @retval E_ERROR  参数非法
- * @retval E_BUSY   DMA 正在传输
  * @note   右对齐显示，前导零以空格替换；负号紧贴首位有效数字左侧。
  *         调用方需保证 u8Length 足以容纳符号位，否则符号可能被截断。
  */
-eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
-                                 uint8_t u8Length, uint8_t u8Decimals,
-                                 uint16_t fc, uint16_t bc, uint8_t sizey)
+eStatusDef LCD_ShowFloatNumBuffered(uint16_t x, uint16_t y, float fValue,
+                                    uint8_t u8Length, uint8_t u8Decimals,
+                                    uint16_t fc, uint16_t bc, uint8_t sizey)
 {
-    uint8_t au8Characters[LCD_DMA_MAX_DIGITS];
-    uint8_t au8Digits[LCD_DMA_MAX_DIGITS];
+    uint8_t au8Characters[LCD_BUFFER_MAX_DIGITS];
+    uint8_t au8Digits[LCD_BUFFER_MAX_DIGITS];
     uint8_t u8Index;
     uint8_t u8Digit;
     uint8_t u8ShowDigit = 0u;
@@ -999,19 +991,13 @@ eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
     uint32_t u32Scaled;
     uint32_t u32Scale = 1u;
     uint32_t u32BufferIndex = 0u;
-    eStatusDef eStatus;
 
-    if ((sizey != LCD_DMA_FONT_SIZE_Y) || (u8Length == 0u) || (u8Length > LCD_DMA_MAX_DIGITS) ||
+    if ((sizey != LCD_BUFFER_FONT_SIZE_Y) || (u8Length == 0u) || (u8Length > LCD_BUFFER_MAX_DIGITS) ||
         (u8Decimals == 0u) || ((uint8_t)(u8Decimals + 1u) >= u8Length) ||
-        ((uint32_t)x + (uint32_t)u8Length * LCD_DMA_FONT_SIZE_X > LCD_W) ||
-        ((uint32_t)y + LCD_DMA_FONT_SIZE_Y > LCD_H))
+        ((uint32_t)x + (uint32_t)u8Length * LCD_BUFFER_FONT_SIZE_X > LCD_W) ||
+        ((uint32_t)y + LCD_BUFFER_FONT_SIZE_Y > LCD_H))
     {
         return E_ERROR;
-    }
-
-    if ((u8LcdDmaBusy != 0u) || (BspSpiIsIdle() == 0u))
-    {
-        return E_BUSY;
     }
 
     if (fValue < 0.0f)
@@ -1077,33 +1063,10 @@ eStatusDef LCD_ShowFloatNumAsync(uint16_t x, uint16_t y, float fValue,
         }
     }
 
-    LCD_DmaRenderString(au8Characters, u8Length, fc, bc, &u32BufferIndex);
-    LCD_Address_Set(x, y, (uint16_t)(x + u8Length * LCD_DMA_FONT_SIZE_X - 1u),
-                    (uint16_t)(y + LCD_DMA_FONT_SIZE_Y - 1u));
+    LCD_BufferRenderString(au8Characters, u8Length, fc, bc, &u32BufferIndex);
+    LCD_Address_Set(x, y, (uint16_t)(x + u8Length * LCD_BUFFER_FONT_SIZE_X - 1u),
+                    (uint16_t)(y + LCD_BUFFER_FONT_SIZE_Y - 1u));
     LCD_DC(DATA);
-    u8LcdDmaBusy = 1u;
-    eStatus = BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)u32BufferIndex);
-    if (eStatus != E_OK)
-    {
-        u8LcdDmaBusy = 0u;
-    }
-    return eStatus;
-}
-
-/**
- * @brief  查询 LCD 的 DMA 字段传输是否仍在进行
- * @retval 1  正在传输
- * @retval 0  空闲，可发起下一个字段
- * @note   由 bsp_spi.c 的 DMA1_Channel3 中断维护底层空闲标志，
- *         本函数再叠加 LCD 自身"当前字段"的 busy 标志，
- *         供 bsp_lcd.c 的字段状态机判断何时推进下一字段。
- */
-uint8_t LCD_IsTransferBusy(void)
-{
-    if ((u8LcdDmaBusy != 0u) && (BspSpiIsIdle() != 0u))
-    {
-        u8LcdDmaBusy = 0u;
-    }
-
-    return u8LcdDmaBusy;
+    BspSpiWriteBufferBlocking(au8LcdBuffer, (uint16_t)u32BufferIndex);
+    return (BspSpiHasError() == 0u) ? E_OK : E_ERROR;
 }
