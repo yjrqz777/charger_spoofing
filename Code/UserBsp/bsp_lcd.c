@@ -2,210 +2,398 @@
  * @file    bsp_lcd.c
  * @brief   LCD 显示底层驱动实现
  *******************************************************************************
- * @note    封装 ST7789V 驱动 API，简化应用层调用
+ * @note    字段缓冲式刷新的实现思路：
+ *          1) 应用层调用 BspLcdBeginRefresh() 开启一帧，随后用 BspLcdAddXxx()
+ *             追加待显示内容，追加只写内存，不碰 SPI；
+ *          2) 每个时间片调用 BspLcdService()，它只在"当前操作已完成"时推进
+ *             到下一条操作，因此单次调用耗时可忽略，不会拉长 time slice；
+ *          3) 浮点/整数走 DMA 异步输出；字符串与清屏为阻塞输出（耗时可控）。
  *******************************************************************************
  */
 
 #include "bsp_lcd.h"
+#include "bsp_spi.h"
+#include "bsp_tick.h"
 #include "st7789v/st7789v.h"
 
-/**
- * @brief  初始化 LCD 显示屏
- * @note   调用 ST7789V 初始化序列，包括：
- *         - 硬件复位
- *         - 睡眠模式退出
- *         - 显示方向设置
- *         - Gamma 校正
- *         - 显示开启
- *         初始化完成后显示白色背景
- */
-void BspLcdInit(void)
-{
-    st7789v_init();
-}
+/** @brief 一帧内最多允许的待显示操作数 */
+#define BSP_LCD_FIELD_MAX        (12u)
 
-/**
- * @brief  在 LCD 指定位置显示无符号整数
- * @param[in] u16X      横坐标（像素）
- * @param[in] u16Y      纵坐标（像素）
- * @param[in] u32Value  待显示的无符号整数值
- * @param[in] u8Length  显示位数
- * @note   使用白色字体、黑色背景、24 号字显示
- *         不显示前导零，不足 u8Length 位时空格填充
- * @see    LCD_ShowIntNum
- */
-HAL_StatusTypeDef BspLcdShowUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value, uint8_t u8Length)
-{
-    return BspLcdShowUIntColor(u16X, u16Y, u32Value, u8Length, BLACK);
-}
+/** @brief 单条操作的最长等待时间（ms），超时则放弃本帧，防止界面卡死 */
+#define BSP_LCD_FIELD_TIMEOUT_MS (500u)
 
-HAL_StatusTypeDef BspLcdShowUIntColor(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
-                                      uint8_t u8Length, uint16_t u16Color)
-{
-    return LCD_ShowIntNumDma(u16X, u16Y, u32Value, u8Length, u16Color, WHITE, 24);
-}
-
-/**
- * @brief  在 LCD 指定位置显示浮点数（保留 3 位小数）
- * @param[in] u16X      横坐标（像素）
- * @param[in] u16Y      纵坐标（像素）
- * @param[in] f32Value  待显示的浮点数值（支持负数）
- * @param[in] u8Length  总字符宽度（含小数点与符号位）
- * @param[in] u16Color  字体颜色
- * @note   使用白色背景、24 号字；u8Length 需容纳 "[-]NNN.NNN" 格式
- */
-HAL_StatusTypeDef BspLcdShowFloatColor(uint16_t u16X, uint16_t u16Y, float f32Value,
-                                       uint8_t u8Length, uint16_t u16Color)
-{
-    return LCD_ShowFloatNumDma(u16X, u16Y, f32Value, u8Length, 3u, u16Color, WHITE, 24);
-}
-
-/* ===================== 字段缓冲式刷新 ===================== */
-
-#define BSP_LCD_FIELD_MAX (8u)
-
-/** @brief 字段类型标识 */
+/** @brief 字段操作类型 */
 typedef enum
 {
-    E_BSP_LCD_FIELD_UINT = 0u,   /**< 无符号整数 */
-    E_BSP_LCD_FIELD_FLOAT = 1u   /**< 浮点数 */
-} eBspLcdFieldTypeDef;
+    E_BSP_LCD_OP_NONE = 0,   /**< 空操作（占位） */
+    E_BSP_LCD_OP_FILL,       /**< 区域填充 */
+    E_BSP_LCD_OP_STRING,     /**< 字符串 */
+    E_BSP_LCD_OP_UINT,       /**< 无符号整数（DMA） */
+    E_BSP_LCD_OP_FLOAT       /**< 浮点数（DMA） */
+} eBspLcdOpTypeDef;
 
-/** @brief 待显示字段描述 */
-typedef struct tBspLcdFieldDef
+/** @brief 待显示操作描述 */
+typedef struct tBspLcdOpDef
 {
-    float f32Value;            /**< 浮点数值（E_BSP_LCD_FIELD_FLOAT 时有效） */
-    uint32_t u32Value;         /**< 无符号整数值（E_BSP_LCD_FIELD_UINT 时有效） */
-    uint16_t u16X;             /**< 横坐标 */
-    uint16_t u16Y;             /**< 纵坐标 */
-    uint16_t u16Color;         /**< 字体颜色 */
-    uint8_t u8Length;          /**< 显示字符宽度 */
-    uint8_t u8FieldType;       /**< 字段类型，见 eBspLcdFieldTypeDef */
-} tBspLcdFieldDef;
+    uint16_t        u16X;        /**< 横坐标 */
+    uint16_t        u16Y;        /**< 纵坐标 */
+    uint16_t        u16Fc;       /**< 前景色 */
+    uint16_t        u16Bc;       /**< 背景色 */
+    uint8_t         u8Type;      /**< 操作类型，见 eBspLcdOpTypeDef */
+    uint8_t         u8Length;    /**< 数字位宽 */
+    uint8_t         u8Decimals;  /**< 小数位数 */
+    uint8_t         u8SizeY;     /**< 字号 */
+    uint8_t         u8TextLen;   /**< 字符串有效长度（不含结尾 0） */
+    uint32_t        u32Value;    /**< 无符号整数值 */
+    float           f32Value;    /**< 浮点数值 */
+    char            acText[18];  /**< 字符串缓冲 */
+} tBspLcdOpDef;
 
-static tBspLcdFieldDef atLcdRequestedField[BSP_LCD_FIELD_MAX];
-static tBspLcdFieldDef atLcdActiveField[BSP_LCD_FIELD_MAX];
-static uint8_t u8LcdRequestedFieldCount = 0u;
-static uint8_t u8LcdActiveFieldCount = 0u;
-static uint8_t u8LcdRefreshRequested = 0u;
-static uint8_t u8LcdRefreshPending = 0u;
-static uint8_t u8LcdActiveFieldIndex = 0u;
-static uint8_t u8LcdRequestedStateId = 0xFFu;
-static uint8_t u8LcdActiveStateId = 0xFFu;
+/* ---- 请求帧与正在输出的活动帧 ---- */
+static tBspLcdOpDef s_atRequestedOp[BSP_LCD_FIELD_MAX];
+static tBspLcdOpDef s_atActiveOp[BSP_LCD_FIELD_MAX];
+
+static uint8_t  s_u8RequestedCount  = 0u;      /**< 请求帧中的操作数 */
+static uint8_t  s_u8ActiveCount     = 0u;      /**< 活动帧中的操作数 */
+static uint8_t  s_u8ActiveIndex     = 0u;      /**< 活动帧当前操作下标 */
+static uint8_t  s_u8RefreshRequested = 0u;     /**< 有新的请求帧待接管 */
+static uint8_t  s_u8RefreshInFlight  = 0u;     /**< 正在输出活动帧 */
+static uint8_t  s_u8RequestedStateId = 0xFFu;  /**< 请求帧对应的系统状态 */
+static uint8_t  s_u8ActiveStateId    = 0xFFu;  /**< 活动帧对应的系统状态 */
+static uint32_t s_u32OpStartMs       = 0u;     /**< 当前操作开始时刻（用于超时保护） */
+
+/* ========================================================================== *
+ *  内部函数
+ * ========================================================================== */
 
 /**
- * @brief  开启一轮字段刷新收集
- * @param[in] u8StateId  当前状态标识（仅用于检测状态切换时丢弃过期请求）
+ * @brief  阻塞等待当前 LCD DMA 传输结束
+ * @param[in] u32TimeoutMs  超时时间（ms）
+ * @retval 0  已空闲
+ * @retval 1  超时
  */
-void BspLcdBeginRefresh(uint8_t u8StateId)
+static uint8_t BspLcdWaitDmaIdle(uint32_t u32TimeoutMs)
 {
-    u8LcdRequestedFieldCount = 0u;
-    u8LcdRequestedStateId = u8StateId;
-    u8LcdRefreshRequested = 1u;
+    uint32_t u32Start = BspTickGetMs();
+
+    while (LCD_IsDmaBusy() != 0u)
+    {
+        if ((BspTickGetMs() - u32Start) > u32TimeoutMs)
+        {
+            return 1u;
+        }
+    }
+
+    return 0u;
 }
 
 /**
- * @brief  向当前刷新帧追加无符号整数字段
- * @note   超过 BSP_LCD_FIELD_MAX 后的追加将被忽略
+ * @brief  输出一条操作到 LCD
+ * @param[in] ptOp  操作描述
+ * @retval 0  已发起输出（可能需要等待 DMA 完成）
+ * @retval 1  失败
  */
-void BspLcdAddUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
-                   uint8_t u8Length, uint16_t u16Color)
+static uint8_t BspLcdOutputOp(const tBspLcdOpDef *ptOp)
 {
-    if (u8LcdRequestedFieldCount < BSP_LCD_FIELD_MAX)
+    switch (ptOp->u8Type)
     {
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16X = u16X;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16Y = u16Y;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u32Value = u32Value;
-        atLcdRequestedField[u8LcdRequestedFieldCount].f32Value = 0.0f;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16Color = u16Color;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u8Length = u8Length;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u8FieldType = E_BSP_LCD_FIELD_UINT;
-        u8LcdRequestedFieldCount++;
+        case E_BSP_LCD_OP_FILL:
+            LCD_Fill(0u, 0u, LCD_W, LCD_H, ptOp->u16Fc);
+            return 0u;
+
+        case E_BSP_LCD_OP_STRING:
+            LCD_ShowString(ptOp->u16X, ptOp->u16Y, (const uint8_t *)ptOp->acText,
+                           ptOp->u16Fc, ptOp->u16Bc, ptOp->u8SizeY, 0u);
+            return 0u;
+
+        case E_BSP_LCD_OP_UINT:
+            if (LCD_ShowIntNumDma(ptOp->u16X, ptOp->u16Y, ptOp->u32Value,
+                                  ptOp->u8Length, ptOp->u16Fc, ptOp->u16Bc,
+                                  ptOp->u8SizeY) != HAL_OK)
+            {
+                return 1u;
+            }
+            return 0u;
+
+        case E_BSP_LCD_OP_FLOAT:
+            if (LCD_ShowFloatNumDma(ptOp->u16X, ptOp->u16Y, ptOp->f32Value,
+                                    ptOp->u8Length, ptOp->u8Decimals,
+                                    ptOp->u16Fc, ptOp->u16Bc,
+                                    ptOp->u8SizeY) != HAL_OK)
+            {
+                return 1u;
+            }
+            return 0u;
+
+        default:
+            return 0u;
     }
 }
 
 /**
- * @brief  向当前刷新帧追加浮点数字段（显示时保留 3 位小数）
- * @note   超过 BSP_LCD_FIELD_MAX 后的追加将被忽略
+ * @brief  判断一条操作是否已经输出完成
+ * @param[in] ptOp  操作描述
+ * @retval 1  完成
+ * @retval 0  仍在进行
+ * @note   填充与字符串为阻塞输出，返回时即已完成，恒为"完成"；
+ *         整数/浮点为 DMA 异步输出，需等待 LCD 的 DMA 忙标志清零。
+ *         （DMA 忙标志由 bsp_spi.c 的 DMA1_Channel3 中断维护，
+ *           并在 st7789v.c 的 LCD_IsDmaBusy() 中叠加字段级状态。）
  */
-void BspLcdAddFloat(uint16_t u16X, uint16_t u16Y, float f32Value,
-                    uint8_t u8Length, uint16_t u16Color)
+static uint8_t BspLcdOpFinished(const tBspLcdOpDef *ptOp)
 {
-    if (u8LcdRequestedFieldCount < BSP_LCD_FIELD_MAX)
-    {
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16X = u16X;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16Y = u16Y;
-        atLcdRequestedField[u8LcdRequestedFieldCount].f32Value = f32Value;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u32Value = 0u;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u16Color = u16Color;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u8Length = u8Length;
-        atLcdRequestedField[u8LcdRequestedFieldCount].u8FieldType = E_BSP_LCD_FIELD_FLOAT;
-        u8LcdRequestedFieldCount++;
-    }
+    (void)ptOp;
+
+    return (LCD_IsDmaBusy() == 0u) ? 1u : 0u;
 }
 
 /**
- * @brief  字段刷新服务：按 DMA 就绪节奏逐字段输出
- * @param[in] u8StateId  当前状态标识，与发起刷新时的标识不一致时丢弃过期帧
- * @note   每次 DMA 传输完成后（返回 HAL_OK）推进到下一字段，
- *         整帧输出完毕后清除挂起标志，等待下一轮 BeginRefresh
+ * @brief  追加一条操作到请求帧
+ * @return 指向新操作的空槽；队列满时返回 0
  */
-void BspLcdService(uint8_t u8StateId)
+static tBspLcdOpDef *BspLcdAllocOp(void)
+{
+    tBspLcdOpDef *ptOp;
+
+    if (s_u8RequestedCount >= BSP_LCD_FIELD_MAX)
+    {
+        return 0;
+    }
+
+    ptOp = &s_atRequestedOp[s_u8RequestedCount];
+    s_u8RequestedCount++;
+
+    memset(ptOp, 0, sizeof(tBspLcdOpDef));
+
+    return ptOp;
+}
+
+/* ========================================================================== *
+ *  对外接口
+ * ========================================================================== */
+
+void BspLcdInit(void)
 {
     uint8_t u8Index;
 
-    if ((u8LcdRefreshRequested != 0u) && (u8LcdRequestedStateId != u8StateId))
+    for (u8Index = 0u; u8Index < BSP_LCD_FIELD_MAX; u8Index++)
     {
-        u8LcdRefreshRequested = 0u;
+        memset(&s_atRequestedOp[u8Index], 0, sizeof(tBspLcdOpDef));
+        memset(&s_atActiveOp[u8Index],    0, sizeof(tBspLcdOpDef));
     }
 
-    if ((u8LcdRefreshPending != 0u) && (u8LcdActiveStateId != u8StateId))
+    s_u8RequestedCount   = 0u;
+    s_u8ActiveCount      = 0u;
+    s_u8ActiveIndex      = 0u;
+    s_u8RefreshRequested = 0u;
+    s_u8RefreshInFlight  = 0u;
+    s_u8RequestedStateId = 0xFFu;
+    s_u8ActiveStateId    = 0xFFu;
+
+    /* ST7789V 初始化（内部含复位时序与整屏填充） */
+    st7789v_init();
+}
+
+void BspLcdClearScreen(uint16_t u16Color)
+{
+    LCD_Fill(0u, 0u, LCD_W, LCD_H, u16Color);
+}
+
+void BspLcdShowString(uint16_t u16X, uint16_t u16Y, const char *pcText,
+                      uint16_t u16Fc, uint16_t u16Bc, uint8_t u8SizeY, uint8_t u8Mode)
+{
+    if (pcText == 0)
     {
-        u8LcdRefreshPending = 0u;
-        u8LcdActiveFieldIndex = 0u;
+        return;
     }
 
-    if ((u8LcdRefreshPending == 0u) && (u8LcdRefreshRequested != 0u))
+    LCD_ShowString(u16X, u16Y, (const uint8_t *)pcText, u16Fc, u16Bc, u8SizeY, u8Mode);
+}
+
+void BspLcdShowUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
+                    uint8_t u8Length, uint16_t u16Fc, uint16_t u16Bc)
+{
+    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
     {
-        for (u8Index = 0u; u8Index < u8LcdRequestedFieldCount; u8Index++)
-        {
-            atLcdActiveField[u8Index] = atLcdRequestedField[u8Index];
-        }
-        u8LcdActiveFieldCount = u8LcdRequestedFieldCount;
-        u8LcdActiveFieldIndex = 0u;
-        u8LcdActiveStateId = u8LcdRequestedStateId;
-        u8LcdRefreshPending = (u8LcdActiveFieldCount != 0u) ? 1u : 0u;
-        u8LcdRefreshRequested = 0u;
+        return;
     }
 
-    if (u8LcdRefreshPending != 0u)
+    (void)LCD_ShowIntNumDma(u16X, u16Y, u32Value, u8Length, u16Fc, u16Bc, 24u);
+}
+
+void BspLcdShowFloat(uint16_t u16X, uint16_t u16Y, float f32Value, uint8_t u8Length,
+                     uint8_t u8Decimals, uint16_t u16Fc, uint16_t u16Bc)
+{
+    if (BspLcdWaitDmaIdle(BSP_LCD_FIELD_TIMEOUT_MS) != 0u)
     {
-        HAL_StatusTypeDef eStatus;
+        return;
+    }
 
-        if (atLcdActiveField[u8LcdActiveFieldIndex].u8FieldType == E_BSP_LCD_FIELD_FLOAT)
+    (void)LCD_ShowFloatNumDma(u16X, u16Y, f32Value, u8Length, u8Decimals, u16Fc, u16Bc, 24u);
+}
+
+void BspLcdBeginRefresh(uint8_t u8StateId)
+{
+    s_u8RequestedCount   = 0u;
+    s_u8RequestedStateId = u8StateId;
+    s_u8RefreshRequested = 1u;
+}
+
+void BspLcdAddFill(uint16_t u16Color)
+{
+    tBspLcdOpDef *ptOp = BspLcdAllocOp();
+
+    if (ptOp == 0)
+    {
+        return;
+    }
+
+    ptOp->u8Type = (uint8_t)E_BSP_LCD_OP_FILL;
+    ptOp->u16Fc  = u16Color;
+}
+
+void BspLcdAddString(uint16_t u16X, uint16_t u16Y, const char *pcText,
+                     uint16_t u16Fc, uint16_t u16Bc, uint8_t u8SizeY)
+{
+    tBspLcdOpDef *ptOp;
+    uint8_t       u8Index = 0u;
+
+    if (pcText == 0)
+    {
+        return;
+    }
+
+    ptOp = BspLcdAllocOp();
+    if (ptOp == 0)
+    {
+        return;
+    }
+
+    ptOp->u8Type  = (uint8_t)E_BSP_LCD_OP_STRING;
+    ptOp->u16X    = u16X;
+    ptOp->u16Y    = u16Y;
+    ptOp->u16Fc   = u16Fc;
+    ptOp->u16Bc   = u16Bc;
+    ptOp->u8SizeY = u8SizeY;
+
+    /* 拷贝字符串（含长度截断保护），不保存调用者的指针，避免悬空 */
+    while ((pcText[u8Index] != '\0') && (u8Index < (uint8_t)(sizeof(ptOp->acText) - 1u)))
+    {
+        ptOp->acText[u8Index] = pcText[u8Index];
+        u8Index++;
+    }
+    ptOp->acText[u8Index] = '\0';
+    ptOp->u8TextLen = u8Index;
+}
+
+void BspLcdAddUInt(uint16_t u16X, uint16_t u16Y, uint32_t u32Value,
+                   uint8_t u8Length, uint16_t u16Color)
+{
+    tBspLcdOpDef *ptOp = BspLcdAllocOp();
+
+    if (ptOp == 0)
+    {
+        return;
+    }
+
+    ptOp->u8Type    = (uint8_t)E_BSP_LCD_OP_UINT;
+    ptOp->u16X      = u16X;
+    ptOp->u16Y      = u16Y;
+    ptOp->u32Value  = u32Value;
+    ptOp->u16Fc     = u16Color;
+    ptOp->u16Bc     = WHITE;
+    ptOp->u8Length  = u8Length;
+    ptOp->u8SizeY   = 24u;
+}
+
+void BspLcdAddFloat(uint16_t u16X, uint16_t u16Y, float f32Value,
+                    uint8_t u8Length, uint8_t u8Decimals, uint16_t u16Color)
+{
+    tBspLcdOpDef *ptOp = BspLcdAllocOp();
+
+    if (ptOp == 0)
+    {
+        return;
+    }
+
+    ptOp->u8Type     = (uint8_t)E_BSP_LCD_OP_FLOAT;
+    ptOp->u16X       = u16X;
+    ptOp->u16Y       = u16Y;
+    ptOp->f32Value   = f32Value;
+    ptOp->u16Fc      = u16Color;
+    ptOp->u16Bc      = WHITE;
+    ptOp->u8Length   = u8Length;
+    ptOp->u8Decimals = u8Decimals;
+    ptOp->u8SizeY    = 24u;
+}
+
+void BspLcdService(uint8_t u8StateId)
+{
+    /* 1) 状态已切换：丢弃过期的请求帧与进行中的活动帧 */
+    if ((s_u8RefreshRequested != 0u) && (s_u8RequestedStateId != u8StateId))
+    {
+        s_u8RefreshRequested = 0u;
+        s_u8RequestedCount   = 0u;
+    }
+
+    if ((s_u8RefreshInFlight != 0u) && (s_u8ActiveStateId != u8StateId))
+    {
+        s_u8RefreshInFlight = 0u;
+        s_u8ActiveIndex     = 0u;
+        s_u8ActiveCount     = 0u;
+    }
+
+    /* 2) 空闲且有新请求：接管请求帧 */
+    if ((s_u8RefreshInFlight == 0u) && (s_u8RefreshRequested != 0u))
+    {
+        uint8_t u8Index;
+
+        for (u8Index = 0u; u8Index < s_u8RequestedCount; u8Index++)
         {
-            eStatus = BspLcdShowFloatColor(atLcdActiveField[u8LcdActiveFieldIndex].u16X,
-                                           atLcdActiveField[u8LcdActiveFieldIndex].u16Y,
-                                           atLcdActiveField[u8LcdActiveFieldIndex].f32Value,
-                                           atLcdActiveField[u8LcdActiveFieldIndex].u8Length,
-                                           atLcdActiveField[u8LcdActiveFieldIndex].u16Color);
-        }
-        else
-        {
-            eStatus = BspLcdShowUIntColor(atLcdActiveField[u8LcdActiveFieldIndex].u16X,
-                                          atLcdActiveField[u8LcdActiveFieldIndex].u16Y,
-                                          atLcdActiveField[u8LcdActiveFieldIndex].u32Value,
-                                          atLcdActiveField[u8LcdActiveFieldIndex].u8Length,
-                                          atLcdActiveField[u8LcdActiveFieldIndex].u16Color);
+            s_atActiveOp[u8Index] = s_atRequestedOp[u8Index];
         }
 
-        if (eStatus == HAL_OK)
+        s_u8ActiveCount      = s_u8RequestedCount;
+        s_u8ActiveIndex      = 0u;
+        s_u8ActiveStateId    = s_u8RequestedStateId;
+        s_u8RefreshInFlight  = (s_u8ActiveCount != 0u) ? 1u : 0u;
+        s_u8RefreshRequested = 0u;
+        s_u32OpStartMs       = BspTickGetMs();
+    }
+
+    /* 3) 推进当前活动帧 */
+    if (s_u8RefreshInFlight != 0u)
+    {
+        /* 3.1 若上一条已输出完毕，则推进下标 */
+        if (BspLcdOpFinished(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
         {
-            u8LcdActiveFieldIndex++;
-            if (u8LcdActiveFieldIndex >= u8LcdActiveFieldCount)
+            s_u8ActiveIndex++;
+            s_u32OpStartMs = BspTickGetMs();
+
+            if (s_u8ActiveIndex >= s_u8ActiveCount)
             {
-                u8LcdRefreshPending = 0u;
+                /* 整帧输出完成 */
+                s_u8RefreshInFlight = 0u;
+                s_u8ActiveIndex     = 0u;
+                s_u8ActiveCount     = 0u;
+                return;
             }
+
+            /* 3.2 输出新的当前操作 */
+            if (BspLcdOutputOp(&s_atActiveOp[s_u8ActiveIndex]) != 0u)
+            {
+                /* 输出失败（多为上一笔 DMA 未空），下个时间片重试 */
+                s_u8ActiveIndex--;
+            }
+            return;
+        }
+
+        /* 3.3 当前操作长时间未完成：放弃本帧，防止界面永久卡住 */
+        if ((BspTickGetMs() - s_u32OpStartMs) > BSP_LCD_FIELD_TIMEOUT_MS)
+        {
+            s_u8RefreshInFlight = 0u;
+            s_u8ActiveIndex     = 0u;
+            s_u8ActiveCount     = 0u;
         }
     }
 }

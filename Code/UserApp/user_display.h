@@ -1,37 +1,31 @@
-﻿/**
+/**
  * @file    user_display.h
  * @brief   用户显示任务头文件 — Protothread 协程驱动 LCD 刷新
  *******************************************************************************
- * @note    每 10ms 调度一次显示任务，按现有状态逻辑刷新 LCD 和 WS2812。
+ * @note    每 10ms 调度一次显示任务，按系统状态刷新 LCD。
+ *          屏幕为 240x135 横屏（ST7789V），单页显示：
+ *          输入电压 / 输出电压 / 输出电流 / 输出功率 / 输出开关状态。
  *******************************************************************************
  */
 
 #ifndef __USER_DISPLAY_H__
 #define __USER_DISPLAY_H__
-#include "Code/user_global.h"
-#include "user_system.h"
-
-#define USR_DISPLAY_TASK_INTERVAL_MS (10u)  /**< 显示刷新周期（毫秒） */
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/** @brief 显示状态-函数映射表项（将系统状态映射到对应的显示处理函数） */
-typedef struct tDisplayFunctionDataDef
-{
-    eSysStateDef eState;         /**< 系统状态 */
-    void (* pfFunction)(void);   /**< 对应的显示处理函数指针 */
-} tDisplayFunctionDataDef;
+#include "Code/user_global.h"
+#include "user_system.h"
 
-/** @brief 显示数据全局结构体 */
-typedef struct tDisplayDataDef
-{
-    uint8_t u8Color[3];          /**< WS2812 RGB 颜色值，索引 [R, G, B] */
-    uint16_t u16Rgb;             /**< 备用 RGB 颜色值 */
-} tDisplayDataDef;
+/** @brief 显示任务调度周期（毫秒） */
+#define USR_DISPLAY_TASK_INTERVAL_MS (10u)
 
-extern tDisplayDataDef tDisplayData;
+/** @brief 数据面板的刷新间隔（毫秒） */
+#define USR_DISPLAY_REFRESH_MS       (100u)
+
+/** @brief 采样更新间隔（毫秒） */
+#define USR_DISPLAY_SAMPLE_MS        (100u)
 
 void UsrDisplayInit(void);
 uint16_t UsrDisplayTask(void);

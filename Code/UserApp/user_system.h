@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file    user_system.h
  * @brief   系统任务与状态管理头文件
  *******************************************************************************
@@ -17,14 +17,15 @@
 
 /**
  * @brief 系统状态枚举
- * @note  状态切换由 user_time.c 和 user_button_fun.c 中的逻辑控制
+ * @note  状态切换：INIT -> POWER_ON 由 user_time.c 按上电时间触发；
+ *        POWER_ON -> RUNNING 由 user_system.c 的 UsrSystemUpdate() 触发。
  */
 typedef enum
 {
     E_SYS_STATE_INIT = 0,       /**< 初始状态，启动后默认进入 */
-    E_SYS_STATE_POWER_ON,       /**< 上电状态，100ms 后从 INIT 自动切换 */
-    E_SYS_STATE_OFF,            /**< 关闭状态 */
-    E_SYS_STATE_RUNNING,        /**< 运行状态，电机正常运转 */
+    E_SYS_STATE_POWER_ON,       /**< 上电状态：显示开机页，100ms 后从 INIT 自动切换 */
+    E_SYS_STATE_OFF,            /**< 关闭状态（预留） */
+    E_SYS_STATE_RUNNING,        /**< 运行状态：显示实时数据面板 */
     E_SYS_STATE_MAX             /**< 状态总数（边界标记） */
 } eSysStateDef;
 
@@ -40,6 +41,7 @@ typedef struct tSysDataDef
 extern tSysDataDef tSysData;
 
 void UsrSystemInit(void);
+void UsrSystemUpdate(void);
 uint16_t UsrSystemTask(void);
 
 #endif /* __USER_SYSTEM_H__ */

@@ -125,14 +125,16 @@ typedef enum
 #define BEEP_PORT           GPIOB
 #define BEEP_PIN            GPIO_Pin_5     /* 预留：原理图未标注 MCU 侧网络，需硬件确认 */
 
-/* ---- 4.7 日志串口 ---- *
- * NETLIST: LOG-TX/LOG-RX 经 R34/R35 100R 接 H2；
- *          原理图未标 MCU 侧引脚号，WCH 库 USART_Printf_Init() 固定用 USART1
- *          默认引脚 PA9(TX)/PA10(RX)，与原理图标注不一致，见本文档"待确认"。 */
-#define LOG_TX_PORT         GPIOA
-#define LOG_TX_PIN          GPIO_Pin_9
-#define LOG_RX_PORT         GPIOA
-#define LOG_RX_PIN          GPIO_Pin_10
+/* ---- 4.7 日志串口 USART1 ---- *
+ * NETLIST: LOG-TX = PB10 -> R34 100R -> H2.2；LOG-RX = PB11 -> R35 100R -> H2.3
+ * 依据：数据手册 QFN28 引脚表 —— PB10 = TX1，PB11 = RX1，即 USART1 的
+ *       默认 TX/RX 引脚（PA9/PA10 在 QFN28 封装上未引出）。
+ * WCH 库 debug.c 的 USART_Printf_Init() 已按此配置 PB10 为 USART1_TX，
+ * 因此 printf / SEGGER_RTT_printf 的日志直接输出到 H2 排针。 */
+#define LOG_TX_PORT         GPIOB
+#define LOG_TX_PIN          GPIO_Pin_10
+#define LOG_RX_PORT         GPIOB
+#define LOG_RX_PIN          GPIO_Pin_11
 
 /* ========================================================================== *
  *  5. 硬件标度换算（用于把 ADC 码值换算成物理量）

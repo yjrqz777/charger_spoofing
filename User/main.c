@@ -1,79 +1,101 @@
 /********************************** (C) COPYRIGHT *******************************
  * File Name          : main.c
- * Author             : WCH
- * Version            : V1.0.0
- * Date               : 2023/12/26
- * Description        : Main program body.
-*********************************************************************************
-* Copyright (c) 2021 Nanjing Qinheng Microelectronics Co., Ltd.
-* Attention: This software (modified or not) and binary are used for
-* microcontroller manufactured by Nanjing Qinheng Microelectronics.
-*******************************************************************************/
+ * Brief              : pd-spoofing (CH32X035G8U6) 主程序
+ *********************************************************************************
+ * Copyright (c) 2021 Nanjing Qinheng Microelectronics Co., Ltd.
+ * Attention: This software (modified or not) and binary are used for
+ * microcontroller manufactured by Nanjing Qinheng Microelectronics.
+ *******************************************************************************/
 
-/*
- *@Note
- *GPIO routine:
- *PA0 push-pull output.
+/**
+ * @file    main.c
+ * @brief   应用入口：初始化各层驱动，然后用 Protothread 时间片调度四个任务
+ *******************************************************************************
+ * @note    时间片机制（见 Code/Task.h）：
+ *            - TIM3 每 1ms 进一次中断，递减 PT_TICK[] 数组（见 Code/UserDrv/bsp_tick.c）；
+ *            - 主循环里用 PT_TASK_REG(Rank, Func) 轮询四个任务，
+ *              某任务的倒计时归零时才调用其函数，函数内 PT_WAIT_UNTIL 返回下次等待时间。
  *
- ***Only PA0--PA15 and PC16--PC17 support input pull-down.
+ *          任务分配：
+ *            Rank 0 : UsrDisplayTask —— 屏幕显示（10ms 周期）
+ *            Rank 1 : UsrButtonTask  —— 按键扫描（5ms 周期）
+ *            Rank 2 : UsrSystemTask  —— 系统状态机（5ms 周期）
+ *            Rank 3 : UsrTimeTask    —— 系统计时（10ms 周期）
+ *
+ *          分层结构：
+ *            UserApp/  应用层：任务、状态机、界面逻辑
+ *            UserBsp/  板级驱动层：LCD/SPI/按键/ADC
+ *            UserDrv/  底层驱动层：节拍、板级 GPIO、外设底层
+ *******************************************************************************
  */
 
-#include "debug.h"
+#include "main.h"
+#include "Task.h"
 
-/* Global define */
+#include "user_display.h"
+#include "user_button.h"
+#include "user_system.h"
+#include "user_time.h"
 
-/* Global Variable */
+#include "bsp_tick.h"
+#include "bsp_board.h"
+#include "bsp_spi.h"
 
-/*********************************************************************
- * @fn      GPIO_Toggle_INIT
- *
- * @brief   Initializes GPIOA.0
- *
- * @return  none
+/**
+ * @brief  系统初始化
+ * @note   顺序要求：
+ *           1) 时钟与延时基础（SystemCoreClockUpdate / Delay_Init）
+ *           2) 串口打印（可选，用于调试日志）
+ *           3) 板级 GPIO（含 LCD 控制线与按键、输出使能的安全默认电平）
+ *           4) 1ms 时间片节拍（TIM3）—— 必须在任何依赖 BspTickGetMs 的驱动之前
+ *           5) SPI1 + DMA（LCD 输出通道）
  */
-void GPIO_Toggle_INIT(void)
+static void SystemInit_User(void)
 {
-    GPIO_InitTypeDef GPIO_InitStructure = {0};
+    /* 1) 时钟与延时 */
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_1);
+    SystemCoreClockUpdate();
+    Delay_Init();
 
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(GPIOA, &GPIO_InitStructure);
+    /* 2) 调试串口（USART1，默认 PA9/PA10） */
+    USART_Printf_Init(115200);
+    SEGGER_RTT_printf(0, "\r\n=== pd-spoofing boot ===\r\n");
+    SEGGER_RTT_printf(0, "SYSCLK:%d Hz  ChipID:%08x\r\n",
+                      (int)SystemCoreClock, (unsigned int)DBGMCU_GetCHIPID());
 
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);
-    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
-    GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-    GPIO_Init(GPIOB, &GPIO_InitStructure);
+    /* 3) 板级 GPIO：输出使能默认关断，避免上电即带载 */
+    BspBoardInit();
 
+    /* 4) 1ms 时间片节拍（TIM3） */
+    BspTickInit();
+
+    /* 5) LCD 的 SPI1 与 DMA */
+    BspSpiInit();
 }
 
 /*********************************************************************
  * @fn      main
  *
- * @brief   Main program.
+ * @brief   主程序：Protothread 时间片任务调度
  *
  * @return  none
  */
 int main(void)
 {
-    u8 i = 0;
+    SystemInit_User();
 
-    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_1);
-    SystemCoreClockUpdate();
-    Delay_Init();
-    USART_Printf_Init(115200);
-    printf("SystemClk:%d\r\n", SystemCoreClock);
-    printf( "ChipID:%08x\r\n", DBGMCU_GetCHIPID() );
-    printf("GPIO Toggle TEST\r\n");
-    GPIO_Toggle_INIT();
-
-    while(1)
+    while (1)
     {
-        Delay_Ms(10);
-        // GPIO_WriteBit(GPIOA, GPIO_Pin_0, (i == 0) ? (i = Bit_SET) : (i = Bit_RESET));
-        GPIO_WriteBit(GPIOB, GPIO_Pin_8, (i == 0) ? (i = Bit_SET) : (i = Bit_RESET));
-        printf("GPIO Toggle TEST=%d\r\n",i);
+        /* 显示任务：LCD 数据面板刷新 */
+        PT_TASK_REG(0, UsrDisplayTask);
+
+        /* 按键任务：3 键事件扫描（单击/双击/长按） */
+        PT_TASK_REG(1, UsrButtonTask);
+
+        /* 系统任务：状态机推进（INIT -> POWER_ON -> RUNNING） */
+        PT_TASK_REG(2, UsrSystemTask);
+
+        /* 时间任务：上电时间与开机时间累计 */
+        PT_TASK_REG(3, UsrTimeTask);
     }
 }

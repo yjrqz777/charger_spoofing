@@ -8,7 +8,7 @@
  * @YJRQZ777
 ***************************************************************************************************/
 #include "bsp_button.h"
-// #include "main.h"
+#include "main.h"
 
 // Macro for callback execution with null check
 #define EVENT_CB(ev)   do { if(handle->cb[ev]) handle->cb[ev](handle); } while(0)
@@ -20,22 +20,34 @@ static Button* head_handle = NULL;
 static void button_handler(Button* handle);
 static inline uint8_t button_read_level(Button* handle);
 
+/**
+ * @brief  读取指定按键的 GPIO 电平
+ * @param[in] u8ButtonId  按键编号（1 起）
+ * @return 引脚电平（1 = 高/未按下，0 = 低/按下）
+ * @note   已由 STM32 HAL 移植为 WCH 标准外设库实现。
+ *         引脚定义来自 Code/main.h：
+ *           KEY1 = PB3，KEY2 = PB7，KEY3 = PB6（本板共 3 个按键）
+ *         按键为低电平有效（外部 10k 上拉 + 10nF 消抖）。
+ */
 uint8_t BspButtonReadLevel(uint8_t u8ButtonId)
 {
 	switch (u8ButtonId) {
 	case 1u:
-		return (uint8_t)HAL_GPIO_ReadPin(KEY1_GPIO_Port, KEY1_Pin);
+		return (uint8_t)GPIO_ReadInputDataBit(KEY1_PORT, KEY1_PIN);
 	case 2u:
-		return (uint8_t)HAL_GPIO_ReadPin(KEY2_GPIO_Port, KEY2_Pin);
+		return (uint8_t)GPIO_ReadInputDataBit(KEY2_PORT, KEY2_PIN);
 	case 3u:
-		return (uint8_t)HAL_GPIO_ReadPin(KEY3_GPIO_Port, KEY3_Pin);
-	case 4u:
-		return (uint8_t)HAL_GPIO_ReadPin(KEY4_GPIO_Port, KEY4_Pin);
+		return (uint8_t)GPIO_ReadInputDataBit(KEY3_PORT, KEY3_PIN);
 	default:
-		return 0u;
+		return 1u;
 	}
 }
 
+/**
+ * @brief  读取全部按键的原始电平掩码
+ * @return 3-bit 掩码，bit0~bit2 对应 KEY1~KEY3
+ * @note   本板只有 3 个按键，故不再读取 KEY4。
+ */
 uint8_t BspButtonGetRawMask(void)
 {
 	uint8_t RawMask = 0u;
@@ -43,7 +55,6 @@ uint8_t BspButtonGetRawMask(void)
 	if (BspButtonReadLevel(1u) != 0u) RawMask |= 0x01u;
 	if (BspButtonReadLevel(2u) != 0u) RawMask |= 0x02u;
 	if (BspButtonReadLevel(3u) != 0u) RawMask |= 0x04u;
-	if (BspButtonReadLevel(4u) != 0u) RawMask |= 0x08u;
 
 	return RawMask;
 }

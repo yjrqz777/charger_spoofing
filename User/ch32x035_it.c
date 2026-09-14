@@ -43,4 +43,14 @@ void HardFault_Handler(void)
   }
 }
 
+/*********************************************************************
+ * @fn      SysTick 说明
+ *
+ * @brief   SysTick（内核 64 位时基）在本工程中专门服务 Debug/debug.c 的
+ *          Delay_Us()/Delay_Ms() 阻塞延时（轮询计数标志，不使用中断）。
+ *
+ *          系统 1ms 时间片节拍由 TIM3 产生，其中断服务函数
+ *          TIM3_IRQHandler() 实现在 Code/UserDrv/bsp_tick.c 中，
+ *          覆盖了启动文件 Startup/startup_ch32x035.S 里的同名弱符号。
+ */
 
