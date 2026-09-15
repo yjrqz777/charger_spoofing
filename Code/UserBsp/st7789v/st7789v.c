@@ -1447,3 +1447,155 @@ uint8_t LCD_IsTransferBusy(void)
 
     return u8LcdDmaBusy;
 }
+
+/* ==========================================================================
+ * 阻塞式矩形输出（供 Code/UserApp/ui 的 2bpp 渲染层使用）
+ * --------------------------------------------------------------------------
+ * ui 层的绘制单元都是"独立的小矩形"（单个字形最大 16x17，数值矩形最大
+ * 109x54），尺寸可控，因此这里不接入 BspLcdService 的字段队列，而是
+ * "设一次窗口 + 循环 DMA"，由调用方在自己的任务上下文中同步完成：
+ *   - 单次 DMA 最多 LCD_DMA_BUFFER_BYTES 字节（约 3ms @12MHz SPI），
+ *     调用之间会等待 DMA 空闲，不会和字段队列抢 DMA；
+ *   - 数值矩形只在内容变化时才重绘（约 5Hz），CPU 占用可忽略；
+ *   - 仅用于主循环任务上下文，禁止在中断中调用。
+ * ========================================================================== */
+
+/**
+ * @brief 等待 LCD 的 TX DMA 空闲
+ * @note  超时上限复用 SPI 轮询计数，避免 DMA 异常时死等。
+ */
+static void LCD_WaitDmaIdle(void)
+{
+    uint32_t u32Timeout = BSP_SPI_TIMEOUT_COUNT;
+
+    while ((LCD_IsTransferBusy() != 0u) && (u32Timeout != 0u))
+    {
+        u32Timeout--;
+    }
+}
+
+/**
+ * @brief  阻塞式填充一个矩形区域
+ * @param[in] u16X,u16Y 左上角坐标
+ * @param[in] u16W,u16H 宽与高（像素），会按屏幕边界裁剪
+ * @param[in] u16Color  RGB565 填充色
+ * @note   窗口只设置一次，之后按 DMA 缓冲容量分块连续灌像素；
+ *         ST7789V 在 0x2C 之后会自动在窗口内递增地址，因此分块是安全的。
+ */
+void LCD_FillRect(uint16_t u16X, uint16_t u16Y, uint16_t u16W, uint16_t u16H, uint16_t u16Color)
+{
+	uint16_t u16ChunkPixels;
+	uint16_t u16Pixels;
+	uint32_t u32Remaining;
+	uint32_t u32Index;
+
+	if ((u16W == 0u) || (u16H == 0u))
+	{
+		return;
+	}
+	if ((u16X >= LCD_W) || (u16Y >= LCD_H))
+	{
+		return;
+	}
+	if (((uint32_t)u16X + u16W) > LCD_W)
+	{
+		u16W = (uint16_t)(LCD_W - u16X);
+	}
+	if (((uint32_t)u16Y + u16H) > LCD_H)
+	{
+		u16H = (uint16_t)(LCD_H - u16Y);
+	}
+
+	LCD_WaitDmaIdle();
+
+	/* DMA 缓冲整体预填充为同一颜色，之后每块只重启 DMA */
+	u16ChunkPixels = (uint16_t)(LCD_DMA_BUFFER_BYTES / 2u);
+	for (u32Index = 0u; u32Index < u16ChunkPixels; u32Index++)
+	{
+		au8LcdDmaBuffer[u32Index * 2u] = (uint8_t)(u16Color >> 8u);
+		au8LcdDmaBuffer[u32Index * 2u + 1u] = (uint8_t)u16Color;
+	}
+
+	LCD_Address_Set(u16X, u16Y, (uint16_t)(u16X + u16W - 1u), (uint16_t)(u16Y + u16H - 1u));
+	LCD_DC(DATA);
+
+	u32Remaining = (uint32_t)u16W * (uint32_t)u16H;
+	while (u32Remaining != 0u)
+	{
+		u16Pixels = (u32Remaining > u16ChunkPixels) ? u16ChunkPixels : (uint16_t)u32Remaining;
+
+		u8LcdDmaBusy = 1u;
+		if (BspSpiWriteBufferDma(au8LcdDmaBuffer, (uint16_t)(u16Pixels * 2u)) != E_OK)
+		{
+			u8LcdDmaBusy = 0u;
+			return;
+		}
+
+		u32Remaining -= u16Pixels;
+		LCD_WaitDmaIdle();
+	}
+}
+
+/**
+ * @brief  阻塞式输出一个 RGB565 像素块到矩形区域
+ * @param[in] u16X,u16Y   左上角坐标
+ * @param[in] u16W,u16H   宽与高（像素），必须与 pu8Rgb565 内的像素数一致
+ * @param[in] pu8Rgb565   像素数据，大端字节序（高字节在前），与 LCD 写入顺序一致
+ * @note   数据直接从调用方缓冲 DMA，不做拷贝；函数返回前会等 DMA 完成，
+ *         因此调用方缓冲在本次调用期间保持有效即可。
+ */
+void LCD_BlitRect(uint16_t u16X, uint16_t u16Y, uint16_t u16W, uint16_t u16H,
+                  const uint8_t *pu8Rgb565)
+{
+	uint32_t u32Remaining;
+	uint16_t u16ChunkBytes;
+	uint16_t u16Len;
+
+	if ((pu8Rgb565 == 0) || (u16W == 0u) || (u16H == 0u))
+	{
+		return;
+	}
+	if ((u16X >= LCD_W) || (u16Y >= LCD_H))
+	{
+		return;
+	}
+	if (((uint32_t)u16X + u16W) > LCD_W)
+	{
+		u16W = (uint16_t)(LCD_W - u16X);
+	}
+	if (((uint32_t)u16Y + u16H) > LCD_H)
+	{
+		u16H = (uint16_t)(LCD_H - u16Y);
+	}
+
+	LCD_WaitDmaIdle();
+
+	LCD_Address_Set(u16X, u16Y, (uint16_t)(u16X + u16W - 1u), (uint16_t)(u16Y + u16H - 1u));
+	LCD_DC(DATA);
+
+	u16ChunkBytes = (uint16_t)LCD_DMA_BUFFER_BYTES;
+	u32Remaining = (uint32_t)u16W * (uint32_t)u16H * 2u;
+	while (u32Remaining != 0u)
+	{
+		if (u32Remaining > u16ChunkBytes)
+		{
+			/* 分块时按像素对齐，避免把一个像素拆到两次 DMA */
+			u16Len = (uint16_t)(u16ChunkBytes & 0xFFFEu);
+		}
+		else
+		{
+			u16Len = (uint16_t)u32Remaining;
+		}
+
+		u8LcdDmaBusy = 1u;
+		if (BspSpiWriteBufferDma(pu8Rgb565, u16Len) != E_OK)
+		{
+			u8LcdDmaBusy = 0u;
+			return;
+		}
+
+		pu8Rgb565 += u16Len;
+		u32Remaining -= u16Len;
+		LCD_WaitDmaIdle();
+	}
+}

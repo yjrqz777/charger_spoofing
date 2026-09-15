@@ -40,6 +40,7 @@ typedef struct tBspAdcDataDef
     float    f32Vout;                    /**< 输出电压 VOUT (V) */
     float    f32Current;                 /**< 输出电流 IBUS (A) */
     float    f32Power;                   /**< 输出功率 VOUT x IBUS (W) */
+    uint8_t  u8Valid;                    /**< 1=本帧三路都转换成功，0=至少一路超时 */
 } tBspAdcDataDef;
 
 /** @brief 全局采样数据（由显示任务读取，由采样周期更新） */

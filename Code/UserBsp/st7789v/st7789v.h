@@ -151,4 +151,29 @@ eStatusDef LCD_ShowStringChunkDma(uint16_t x, uint16_t y, const char *p,
 void LCD_ShowPicture(uint16_t x, uint16_t y, uint16_t length, uint16_t width, const uint8_t pic[]);
 void LCD_ShowChineseTEST(uint16_t x, uint16_t y, uint8_t *s, uint16_t fc, uint16_t bc, uint8_t sizeW, uint8_t sizeH, uint8_t mode);
 
+/* ==========================================================================
+ * 阻塞式矩形输出
+ * --------------------------------------------------------------------------
+ * 供 Code/UserApp/ui 的 2bpp 渲染层使用：界面按"独立小矩形"重绘，
+ * 不需要整屏帧缓冲。两个接口都是同步的（返回前等 DMA 完成），
+ * 单次最多推送 LCD_DMA_BUFFER_BYTES 字节，只能在主循环任务上下文调用。
+ * ========================================================================== */
+
+/**
+ * @brief  阻塞式填充一个矩形区域
+ * @param[in] u16X,u16Y 左上角坐标
+ * @param[in] u16W,u16H 宽与高（像素），会按 240x135 屏幕边界裁剪
+ * @param[in] u16Color  RGB565 填充色
+ */
+void LCD_FillRect(uint16_t u16X, uint16_t u16Y, uint16_t u16W, uint16_t u16H, uint16_t u16Color);
+
+/**
+ * @brief  阻塞式输出一个 RGB565 像素块到矩形区域
+ * @param[in] u16X,u16Y  左上角坐标
+ * @param[in] u16W,u16H  宽与高（像素），必须与 pu8Rgb565 内的像素数一致
+ * @param[in] pu8Rgb565  像素数据，大端字节序（高字节在前）
+ */
+void LCD_BlitRect(uint16_t u16X, uint16_t u16Y, uint16_t u16W, uint16_t u16H,
+                  const uint8_t *pu8Rgb565);
+
 #endif /* __ST7789V_H__ */

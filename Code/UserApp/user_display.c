@@ -1,27 +1,31 @@
 /**
  * @file    user_display.c
- * @brief   用户显示任务实现 — 单页实时数据面板
+ * @brief   用户显示任务实现 — 单页实时数据仪表界面
  *******************************************************************************
  * @note    屏幕：240x135 横屏（ST7789V，SPI1 + DMA）
  *
- *          界面布局（24 号字，每行 24 像素）：
+ *          界面实现见 Code/UserApp/ui/ui_dashboard.c：
  *            +--------------------------------------------+
- *            | pd-spoofing                EN:OFF          |  第 0 行（16 号字）
- *            | VBUS   12.34 V                             |  第 1 行 y=28
- *            | VOUT   12.30 V                             |  第 2 行 y=56
- *            | IBUS    1.234 A                            |  第 3 行 y=84
- *            | POUT   15.18 W                             |  第 4 行 y=106
- *            +--------------------------------------------+
+ *            | * POWER MONITOR                  ONLINE     |  顶部状态栏
+ *            | +----------------+  +----------------+     |
+ *            | | VBUS      12.08 V|  | VOUT      11.96 V|   卡片
+ *            | +----------------+  +----------------+     |
+ *            | +-----------+ +-------+ +------------+     |
+ *            | | POWER     | | IBUS  | | OUTPUT  [ o]|     小区域
+ *            | | 14.7 W    | | 1.22 A| | ON         |     |
+ *            | +-----------+ +-------+ +------------+     |
  *
- *          刷新策略（配合 BspLcdService 的异步字段状态机）：
- *            - 每 100ms 采样一次 ADC；
- *            - 每 100ms 组装一帧显示请求，由 BspLcdService() 逐条 DMA 输出；
- *            - 整屏填充只在进入状态时执行一次（阻塞约 200ms）。
+ *          刷新策略：
+ *            - ADC 采样每 100ms 一次（BspAdcUpdateAll，含 IIR 滤波）；
+ *            - 界面每 200ms（5Hz）提交一帧数据，UiDashboard_Refresh() 比较
+ *              格式化后的字符串，只重绘变化的矩形；
+ *            - 整屏背景只在进入 RUNNING 时绘制一次。
  *******************************************************************************
  */
 
 #include "user_display.h"
 #include "user_config.h"
+#include "ui/ui_dashboard.h"
 #include "bsp_lcd.h"
 #include "bsp_adc.h"
 #include "bsp_board.h"
@@ -29,18 +33,6 @@
 #include "bsp_usb_pd.h"
 #include "bsp_spi.h"
 #include "st7789v/st7789v.h"
-
-/* ---- 布局常量 ---- */
-#define DISPLAY_ROW_HEIGHT      (28u)    /**< 数据行行高 */
-#define DISPLAY_ROW0_Y          (0u)     /**< 顶栏 Y */
-#define DISPLAY_ROW1_Y          (28u)    /**< 第 1 行 Y */
-#define DISPLAY_ROW2_Y          (56u)    /**< 第 2 行 Y */
-#define DISPLAY_ROW3_Y          (84u)    /**< 第 3 行 Y */
-#define DISPLAY_ROW4_Y          (106u)   /**< 第 4 行 Y */
-
-#define DISPLAY_LABEL_X         (4u)     /**< 标签 X */
-#define DISPLAY_VALUE_X         (72u)    /**< 数值 X（24 号字，6 字符宽 72px） */
-#define DISPLAY_EN_X            (168u)   /**< 开关状态 X */
 
 /** @brief Runtime diagnostic log interval in milliseconds. */
 #define DISPLAY_DIAGNOSTIC_INTERVAL_MS (1000u)
@@ -79,85 +71,41 @@ void UsrDisplayInit(void)
 }
 
 /**
- * @brief  绘制静态内容（顶栏与行标签）
- * @note   只在状态变化后执行一次，走阻塞输出（字符串接口），
- *         此时没有排队字段，不会与字段状态机冲突。
+ * @brief  把 ADC 的浮点物理量换算成界面层使用的整数工程单位
+ * @param[in] f32Value 物理量（V 或 A）
+ * @return 毫单位整数（mV 或 mA）；负值按 0 处理
+ * @note   只是定点换算，不涉及浮点格式化；界面层完全不碰浮点。
  */
-static void UsrDisplayDrawStatic(void)
+static uint32_t UsrDisplayToMilli(float f32Value)
 {
-    BspLcdShowString(DISPLAY_LABEL_X, DISPLAY_ROW0_Y, "pd-spoofing", BLACK, WHITE, 16u, 0u);
-    BspLcdShowString(DISPLAY_LABEL_X, DISPLAY_ROW1_Y, "VBUS", BLACK, WHITE, 24u, 0u);
-    BspLcdShowString(DISPLAY_LABEL_X, DISPLAY_ROW2_Y, "VOUT", BLACK, WHITE, 24u, 0u);
-    BspLcdShowString(DISPLAY_LABEL_X, DISPLAY_ROW3_Y, "IBUS", BLACK, WHITE, 24u, 0u);
-    BspLcdShowString(DISPLAY_LABEL_X, DISPLAY_ROW4_Y, "POUT", BLACK, WHITE, 16u, 0u);
+    if (f32Value <= 0.0f)
+    {
+        return 0u;
+    }
+
+    return (uint32_t)(f32Value * 1000.0f + 0.5f);
 }
 
 /**
- * @brief  刷新一帧实时数据
- * @param[in] ptData  采样数据
- * @note   本函数只写请求队列，实际输出由 BspLcdService() 分时间片推进。
+ * @brief  把最近一次采样组装成界面数据
+ * @param[out] ptUi  界面数据结构
  */
-static void UsrDisplayRefreshFrame(const tBspAdcDataDef *ptData)
+static void UsrDisplayBuildUiData(UiPowerData *ptUi)
 {
-    const tBspUsbPdStatusDef *ptPdStatus;
-    char acPdProfileText[10];
-    char acPdVoltageText[10];
+    const tBspAdcDataDef *ptData = BspAdcGetData();
 
-    ptPdStatus = BspUsbPdGetStatus();
-    BspLcdBeginRefresh((uint8_t)tSysData.eState);
+    ptUi->vbus_mv = UsrDisplayToMilli(ptData->f32Voltage);
+    ptUi->vout_mv = UsrDisplayToMilli(ptData->f32Vout);
+    ptUi->ibus_ma = UsrDisplayToMilli(ptData->f32Current);
 
-    /* 第 1 行：输入母线电压（3 位整数 + 2 位小数，共 6 字符） */
-    BspLcdAddFloat(DISPLAY_VALUE_X, DISPLAY_ROW1_Y, ptData->f32Voltage, 6u, 2u, BLACK);
+    /* 输入功率 = VBUS x IBUS（64 位中间值防止溢出，再四舍五入到 mW）。
+     * 当前硬件没有 IOUT 采样，不能把它当成"输出功率"。 */
+    ptUi->power_mw = (uint32_t)(((uint64_t)ptUi->vbus_mv * (uint64_t)ptUi->ibus_ma + 500u) / 1000u);
 
-    /* 第 2 行：输出电压 */
-    BspLcdAddFloat(DISPLAY_VALUE_X, DISPLAY_ROW2_Y, ptData->f32Vout, 6u, 2u, BLACK);
+    /* 开关状态取软件维护的 VOUT-EN 命令状态，而不是 ADC 推断 */
+    ptUi->output_enabled = (BspBoardGetVoutEnable() != 0u) ? true : false;
 
-    /* 第 3 行：输出电流（3 位小数，可显示到 9.999A） */
-    BspLcdAddFloat(DISPLAY_VALUE_X, DISPLAY_ROW3_Y, ptData->f32Current, 6u, 3u, BLACK);
-
-    /* 第 4 行：输出功率（2 位小数，6 字符宽；y=106 + 24 = 130 < 135） */
-    BspLcdAddFloat(DISPLAY_VALUE_X, DISPLAY_ROW4_Y, ptData->f32Power, 6u, 2u, BLACK);
-
-    /* Top bar: selected fixed PDO and total number advertised by the source. */
-    if (ptPdStatus->u8Connected == 0u)
-    {
-        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "PD:OFF ");
-        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:--V ");
-        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText, RED, WHITE, 16u);
-        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
-                        RED, WHITE, 16u);
-    }
-    else if (ptPdStatus->u8ContractValid == 0u)
-    {
-        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "PD:WAIT");
-        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:... ");
-        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText,
-                        BLUE, WHITE, 16u);
-        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
-                        BLUE, WHITE, 16u);
-    }
-    else
-    {
-        (void)snprintf(acPdProfileText, sizeof(acPdProfileText), "P%u/%u   ",
-                       (unsigned int)ptPdStatus->u8RequestedPdo,
-                       (unsigned int)ptPdStatus->u8PdoCount);
-        (void)snprintf(acPdVoltageText, sizeof(acPdVoltageText), "PD:%uV  ",
-                       (unsigned int)(ptPdStatus->u16VoltageMv / 1000u));
-        BspLcdAddString(100u, DISPLAY_ROW0_Y, acPdProfileText,
-                        GREEN, WHITE, 16u);
-        BspLcdAddString(160u, DISPLAY_ROW1_Y + 4u, acPdVoltageText,
-                        GREEN, WHITE, 16u);
-    }
-
-    /* 顶栏右侧：输出开关状态 */
-    if (BspBoardGetVoutEnable() != 0u)
-    {
-        BspLcdAddString(DISPLAY_EN_X, DISPLAY_ROW0_Y, "EN:ON ", BLACK, WHITE, 16u);
-    }
-    else
-    {
-        BspLcdAddString(DISPLAY_EN_X, DISPLAY_ROW0_Y, "EN:OFF", BLACK, WHITE, 16u);
-    }
+    ptUi->measurements_valid = (ptData->u8Valid != 0u) ? true : false;
 }
 
 /**
@@ -170,7 +118,7 @@ static void UsrDisplayInitState(void)
 
 /**
  * @brief  POWER_ON 状态显示处理：开机页
- * @note   清屏与字符串现在都是"入队 + 分批 DMA"，本函数只登记一次内容，
+ * @note   清屏与字符串都是"入队 + 分批 DMA"，本函数只登记一次内容，
  *         实际像素由 BspLcdService() 在每个时间片推进，不再阻塞主循环。
  */
 static void UsrDisplayPowerOnState(void)
@@ -191,29 +139,26 @@ static void UsrDisplayPowerOnState(void)
 }
 
 /**
- * @brief  RUNNING 状态显示处理：实时数据面板
+ * @brief  RUNNING 状态显示处理：实时数据仪表界面
  * @note   采样每 USR_DISPLAY_SAMPLE_MS 一次；
- *         刷新每 USR_DISPLAY_REFRESH_MS 提交一帧字段请求。
- *         清屏填充与字符串都走分批 DMA，本函数不会长时间阻塞主循环 ——
- *         这一点很关键，USB-PD 的 500ms 应答窗口依赖主循环及时转起来。
+ *         界面每 USR_DISPLAY_REFRESH_MS 提交一帧并按需局部重绘。
+ *         仪表页自己直接操作 LCD（阻塞小矩形 DMA），不走字段队列，
+ *         每次重绘量都很小，不会长时间占用主循环。
  */
 static void UsrDisplayRunningState(void)
 {
-    const tBspAdcDataDef *ptData;
-    const tBspUsbPdStatusDef *ptPdStatus;
+    UiPowerData tUiData;
 
-    /* 进入 RUNNING 的第一次：清屏 + 画静态内容（都是入队操作） */
+    /* 进入 RUNNING 的第一次：整屏背景 + 静态骨架只画一次 */
     if (s_u8ScreenCleared == 0u)
     {
-        BspLcdClearScreen(WHITE);
+        /* 丢弃开机页可能还在排队的字段帧，避免和仪表页的直接绘制抢 DMA */
+        BspLcdCancelRefresh();
+        UiDashboard_Init();
         s_u8ScreenCleared = 1u;
-        s_u8StaticDrawn   = 0u;
-    }
-
-    if (s_u8StaticDrawn == 0u)
-    {
-        UsrDisplayDrawStatic();
-        s_u8StaticDrawn = 1u;
+        s_u8StaticDrawn   = 1u;
+        s_u16SampleAcc    = USR_DISPLAY_SAMPLE_MS;
+        s_u16RefreshAcc   = USR_DISPLAY_REFRESH_MS;
     }
 
     /* 采样累加 */
@@ -224,24 +169,35 @@ static void UsrDisplayRunningState(void)
         BspAdcUpdateAll();
     }
 
-    /* 刷新累加：周期到时提交一帧字段请求 */
+    /* 组装一次数据快照（纯整数换算，开销可忽略；也是诊断打印的数据来源） */
+    UsrDisplayBuildUiData(&tUiData);
+
+    /* 刷新累加：周期到时提交一帧数据，由界面层比较后局部重绘 */
     s_u16RefreshAcc += USR_DISPLAY_TASK_INTERVAL_MS;
     if (s_u16RefreshAcc >= USR_DISPLAY_REFRESH_MS)
     {
         s_u16RefreshAcc = 0u;
 
-        ptData = BspAdcGetData();
-        UsrDisplayRefreshFrame(ptData);
+        UiDashboard_SetData(&tUiData);
+        UiDashboard_Refresh();
     }
 
     s_u16DiagnosticAcc += USR_DISPLAY_TASK_INTERVAL_MS;
     if (s_u16DiagnosticAcc >= DISPLAY_DIAGNOSTIC_INTERVAL_MS)
     {
-        s_u16DiagnosticAcc = 0u;
-        ptData = BspAdcGetData();
-        ptPdStatus = BspUsbPdGetStatus();
+        const tBspAdcDataDef *ptData = BspAdcGetData();
+        const tBspUsbPdStatusDef *ptPdStatus = BspUsbPdGetStatus();
 
-        printf("[RUN] ADC vbus=%u vout=%u ibus=%u keys=0x%02x PD=%u/%u %umV EN=%u dma_idle=%u spi_error=%u\r\n",
+        s_u16DiagnosticAcc = 0u;
+
+        printf("[RUN] rail vbus=%u vout=%u ibus=%u power=%u valid=%u EN=%u\r\n",
+               (unsigned int)tUiData.vbus_mv,
+               (unsigned int)tUiData.vout_mv,
+               (unsigned int)tUiData.ibus_ma,
+               (unsigned int)tUiData.power_mw,
+               (unsigned int)(ptData->u8Valid),
+               (unsigned int)BspBoardGetVoutEnable());
+        printf("[RUN] raw vbus=%u vout=%u ibus=%u keys=0x%02x PD=%u/%u %umV dma_idle=%u spi_error=%u\r\n",
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VBUS],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_VOUT],
                (unsigned int)ptData->u16Raw[E_BSP_ADC_IBUS],
@@ -249,7 +205,6 @@ static void UsrDisplayRunningState(void)
                (unsigned int)ptPdStatus->u8RequestedPdo,
                (unsigned int)ptPdStatus->u8PdoCount,
                (unsigned int)ptPdStatus->u16VoltageMv,
-               (unsigned int)BspBoardGetVoutEnable(),
                (unsigned int)BspSpiIsIdle(),
                (unsigned int)BspSpiHasError());
     }
@@ -329,7 +284,7 @@ uint16_t UsrDisplayTask(void)
             }
         }
 
-        /* 推进 LCD 字段状态机，每个时间片最多轮询输出一个字段。 */
+        /* 推进 LCD 字段状态机（开机页的异步字段；仪表页为无操作） */
         BspLcdService((uint8_t)tSysData.eState);
     }
     PT_END();

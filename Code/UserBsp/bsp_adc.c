@@ -141,6 +141,7 @@ void BspAdcUpdateAll(void)
     uint8_t  u8Index;
     uint16_t u16Raw;
     float    af32Value[E_BSP_ADC_CH_MAX];
+    uint8_t  u8AllOk = 1u;
 
     /* 1) 依次采样三路并换算为物理量 */
     for (u8Index = 0u; u8Index < (uint8_t)E_BSP_ADC_CH_MAX; u8Index++)
@@ -148,6 +149,10 @@ void BspAdcUpdateAll(void)
         if (BspAdcReadRaw((eBspAdcChannelDef)u8Index, &u16Raw) == 0u)
         {
             tBspAdcData.u16Raw[u8Index] = u16Raw;
+        }
+        else
+        {
+            u8AllOk = 0u;
         }
 
         af32Value[u8Index] = (float)tBspAdcData.u16Raw[u8Index] * s_af32CodeToUnit[u8Index];
@@ -160,6 +165,9 @@ void BspAdcUpdateAll(void)
 
     /* 3) 功率 = 输出电压 x 输出电流 */
     tBspAdcData.f32Power = tBspAdcData.f32Vout * tBspAdcData.f32Current;
+
+    /* 4) 有效性标记：只要有一次通道转换超时，本帧就标记为无效 */
+    tBspAdcData.u8Valid = u8AllOk;
 }
 
 const tBspAdcDataDef *BspAdcGetData(void)

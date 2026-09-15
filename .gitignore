@@ -1,2 +1,10 @@
 obj/*
 /.mrs
+
+# PC 端界面预览的临时产物（保留 out/*.png 与 out/report.txt 作为验证证据）
+tools/ui_preview/*.exe
+tools/ui_preview/out/*.ppm
+tools/ui_preview/out/crop_*.png
+
+# 字库生成时的字体发行包缓存
+tools/font_converter/_cache/
